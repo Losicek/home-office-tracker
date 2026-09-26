@@ -13,13 +13,16 @@ export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 
 TEAM_ID="${APPLE_TEAM_ID:-W3LT8G9294}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-homeoffice-notary}"
-IDENTITY=$(security find-identity -v -p codesigning \
-  | grep -o "\"Developer ID Application: [^\"]*($TEAM_ID)\"" | head -1 | tr -d '"')
+# Podle otisku (SHA-1), ne jména: stejný certifikát bývá v klíčence víckrát
+# a codesign pak hlásí „ambiguous“.
+CERT_LINE=$(security find-identity -v -p codesigning \
+  | grep "Developer ID Application: .*($TEAM_ID)" | head -1)
+IDENTITY=$(echo "$CERT_LINE" | awk '{print $2}')
 if [ -z "$IDENTITY" ]; then
   echo "Chybí certifikát „Developer ID Application“ pro tým $TEAM_ID." >&2
   exit 1
 fi
-echo "Podpis: $IDENTITY"
+echo "Podpis: $(echo "$CERT_LINE" | cut -d'"' -f2) [$IDENTITY]"
 
 VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
 export APPLE_SIGNING_IDENTITY="$IDENTITY"
@@ -37,8 +40,7 @@ xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature -v "$DMG"
 
-OUT="../HomeOfficeTracker Instalace"
+OUT="$(cd .. && pwd)/HomeOfficeTracker Instalace"
 mkdir -p "$OUT"
-rm -f "$OUT"/*Mac*.dmg
 cp "$DMG" "$OUT/Home Office Tracker $VERSION - Mac.dmg"
 echo "Hotovo: $OUT/Home Office Tracker $VERSION - Mac.dmg"
