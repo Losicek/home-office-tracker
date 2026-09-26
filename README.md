@@ -19,6 +19,9 @@ Everything stays on the employee's computer: no account, no server, no cloud.
 - **One-click workflow:** *Start working* → *Pause* / *Resume* → *End work*,
   with a live stopwatch, today's total and the list of today's work sessions.
   A day can have any number of work sessions.
+- **Projects:** create your own projects (name + color), pick one before you
+  start, and switch it during work. Reports show time per project and can be
+  filtered to one project. Archived projects stay in reports.
 - **Time per application:** the app in the foreground is recorded while you
   work. The UI shows the top 5 apps and an expandable *Other* row.
 - **Automatic break after inactivity:** after N minutes without mouse or

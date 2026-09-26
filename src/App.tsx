@@ -5,7 +5,17 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import logoDark from "./assets/losenicky-logo-dark.svg";
 import logoLight from "./assets/losenicky-logo-light.svg";
-import { api, AppRow, Report, SessionRow, Settings, StatusView, ThemeSetting } from "./api";
+import {
+  api,
+  AppRow,
+  ProjectFilter,
+  ProjectRow,
+  Report,
+  SessionRow,
+  Settings,
+  StatusView,
+  ThemeSetting,
+} from "./api";
 import {
   clock,
   clockWithSeconds,
@@ -21,9 +31,16 @@ import {
   toIso,
 } from "./format";
 import { DICTIONARIES, I18nContext, Lang, LANGUAGES, useT } from "./i18n";
+import {
+  ProjectDot,
+  ProjectSelect,
+  ProjectsView,
+  QuickCreateProject,
+  useProjects,
+} from "./projects";
 import "./App.css";
 
-type Tab = "today" | "reports" | "settings";
+type Tab = "today" | "reports" | "projects" | "settings";
 
 /** Překreslení každých `ms` — pro běžící stopky a hodiny. */
 function useNow(ms = 500): number {
@@ -90,6 +107,7 @@ export default function App() {
             [
               ["today", t.tabToday],
               ["reports", t.tabReports],
+              ["projects", t.tabProjects],
               ["settings", t.tabSettings],
             ] as [Tab, string][]
           ).map(([id, label]) => (
@@ -102,6 +120,7 @@ export default function App() {
         <main key={lang}>
           {tab === "today" && <TodayView />}
           {tab === "reports" && <ReportsView />}
+          {tab === "projects" && <ProjectsView />}
           {tab === "settings" && <SettingsView settings={settings} onChange={setSettings} />}
         </main>
       </div>
@@ -115,6 +134,9 @@ function TodayView() {
   const [status, setStatus] = useState<StatusView | null>(null);
   const [today, setToday] = useState<{ report: Report; fetchedAt: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [projects, refreshProjects] = useProjects();
+  // undefined = předvybraný naposledy použitý projekt z jádra
+  const [picked, setPicked] = useState<number | null | undefined>(undefined);
 
   const refresh = useCallback(() => {
     api.status().then(setStatus).catch((e) => setError(String(e)));
@@ -147,6 +169,7 @@ function TodayView() {
   const sessionWorked = (status?.sessionWorkedMs ?? 0) + drift;
   const todayWorked = (today?.report.workedMs ?? 0) + (working && today ? now - today.fetchedAt : 0);
   const state = status?.status ?? "off";
+  const selectedProject = picked !== undefined ? picked : (status?.project?.id ?? null);
   const statusLabel = {
     off: t.statusOff,
     working: t.statusWorking,
@@ -183,9 +206,36 @@ function TodayView() {
           </div>
         )}
 
+        <div className="project-bar">
+          <span className="muted">{state === "off" ? t.project : t.switchProject}</span>
+          {state === "off" ? (
+            <ProjectSelect projects={projects} value={selectedProject} onChange={setPicked} />
+          ) : (
+            <ProjectSelect
+              projects={projects}
+              value={status?.project?.id ?? null}
+              onChange={(id) => run(() => api.switchProject(id))}
+            />
+          )}
+          {state === "off" && (
+            <QuickCreateProject
+              onCreated={(id) => {
+                refreshProjects();
+                setPicked(id);
+              }}
+            />
+          )}
+        </div>
+
         <div className="actions">
           {state === "off" && (
-            <button className="btn primary big" onClick={() => run(api.start)}>
+            <button
+              className="btn primary big"
+              onClick={() => {
+                run(() => api.start(selectedProject));
+                setPicked(undefined);
+              }}
+            >
               {t.start}
             </button>
           )}
@@ -232,6 +282,7 @@ function SessionList({ sessions }: { sessions: SessionRow[] }) {
         <tr>
           <th>{t.colFrom}</th>
           <th>{t.colTo}</th>
+          <th>{t.project}</th>
           <th className="num">{t.colWork}</th>
           <th className="num">{t.colBreaks}</th>
         </tr>
@@ -241,6 +292,10 @@ function SessionList({ sessions }: { sessions: SessionRow[] }) {
           <tr key={s.id}>
             <td>{clock(s.startedAt)}</td>
             <td>{s.endedAt ? clock(s.endedAt) : <span className="badge">{t.inProgress}</span>}</td>
+            <td className="project-cell">
+              <ProjectDot color={s.projectColor} />
+              <span className={s.projectName ? "" : "muted"}>{s.projectName ?? t.noProject}</span>
+            </td>
             <td className="num">{duration(s.workedMs)}</td>
             <td className="num">
               {duration(s.pausedMs)}
@@ -318,14 +373,19 @@ function ReportsView() {
   const [anchor, setAnchor] = useState(new Date());
   const [report, setReport] = useState<Report | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ProjectFilter>("all");
+  const [projects] = useProjects();
 
   const { from, to } = periodRange(period, anchor);
   const fromIso = toIso(from);
   const toIsoStr = toIso(to);
 
   const refresh = useCallback(() => {
-    api.report(fromIso, toIsoStr).then(setReport).catch((e) => setMessage(String(e)));
-  }, [fromIso, toIsoStr]);
+    api
+      .report(fromIso, toIsoStr, filter)
+      .then(setReport)
+      .catch((e) => setMessage(String(e)));
+  }, [fromIso, toIsoStr, filter]);
   useRefresh(refresh, 30000);
 
   const doExport = async (format: "csv" | "xlsx") => {
@@ -340,7 +400,7 @@ function ReportsView() {
     });
     if (!path) return;
     try {
-      await api.exportReport(path, format, fromIso, toIsoStr);
+      await api.exportReport(path, format, fromIso, toIsoStr, filter);
       setMessage(t.savedTo(path));
     } catch (e) {
       setMessage(t.exportFailed(String(e)));
@@ -378,6 +438,18 @@ function ReportsView() {
             {t.today}
           </button>
         </div>
+        <div className="filter">
+          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="all">{t.allProjects}</option>
+            <option value="none">{t.noProject}</option>
+            {projects.map((p) => (
+              <option key={p.id} value={String(p.id)}>
+                {p.name}
+                {p.archived ? ` (${t.archived.toLowerCase()})` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="export">
           <button className="btn" onClick={() => doExport("xlsx")}>
             {t.exportExcel}
@@ -398,6 +470,13 @@ function ReportsView() {
           value={duration(workedDays ? (report?.workedMs ?? 0) / workedDays : 0)}
         />
       </div>
+
+      {filter === "all" && (report?.projects.length ?? 0) > 0 && (
+        <section className="card projects-card">
+          <h2>{t.tabProjects}</h2>
+          <ProjectTotals rows={report!.projects} total={report!.workedMs} />
+        </section>
+      )}
 
       <div className="grid-2">
         <section className="card">
@@ -446,6 +525,32 @@ function ReportsView() {
         </section>
       </div>
     </div>
+  );
+}
+
+function ProjectTotals({ rows, total }: { rows: ProjectRow[]; total: number }) {
+  const t = useT();
+  const max = Math.max(1, ...rows.map((r) => r.workedMs));
+  return (
+    <ul className="app-list">
+      {rows.map((r) => (
+        <li key={r.id ?? "none"}>
+          <div className="app-row">
+            <span className="app-name">
+              <ProjectDot color={r.color} /> {r.name ?? t.noProject}
+            </span>
+            <span className="muted">
+              {duration(r.workedMs)} · {total ? Math.round((r.workedMs / total) * 100) : 0} %
+            </span>
+          </div>
+          <div className="bar">
+            <div
+              style={{ width: `${(r.workedMs / max) * 100}%`, background: r.color ?? undefined }}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 

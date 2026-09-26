@@ -4,11 +4,12 @@
 //! - `sessions`  — jedna „pracovní akce“ (Začít pracovat → Konec práce)
 //! - `segments`  — souvislé úseky práce (`work`) a pauz (`pause`) uvnitř akce
 //! - `app_usage` — úseky, kdy byla v popředí daná aplikace (jen během práce)
+//! - `projects`  — projekty, které si uživatel vytváří; akce patří k projektu
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -57,6 +58,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              CREATE INDEX segments_time ON segments(started_at, ended_at);
              CREATE INDEX app_usage_time ON app_usage(started_at, ended_at);
              CREATE INDEX sessions_time ON sessions(started_at, ended_at);",
+        )?;
+    }
+    if version < 2 {
+        // uuid + updated_at + archivace místo mazání: připraveno na synchronizaci.
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                 id         INTEGER PRIMARY KEY,
+                 uuid       TEXT NOT NULL UNIQUE,
+                 name       TEXT NOT NULL,
+                 color      TEXT NOT NULL,
+                 archived   INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             ALTER TABLE sessions ADD COLUMN project_id INTEGER REFERENCES projects(id);
+             CREATE INDEX sessions_project ON sessions(project_id);",
         )?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;

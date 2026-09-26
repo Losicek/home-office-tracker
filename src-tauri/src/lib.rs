@@ -2,6 +2,7 @@ mod db;
 mod export;
 mod i18n;
 pub mod platform;
+mod projects;
 mod report;
 mod tracker;
 
@@ -56,8 +57,47 @@ fn get_status(state: tauri::State<AppState>) -> CmdResult<StatusView> {
 // Aplikaci v popředí doplní nejbližší tick (během kliknutí je vpředu stejně
 // tahle appka).
 #[tauri::command]
-fn start_work(app: AppHandle) -> CmdResult<StatusView> {
-    with_tracker(&app, |t, now| t.start(now, None))
+fn start_work(app: AppHandle, project: Option<i64>) -> CmdResult<StatusView> {
+    with_tracker(&app, |t, now| t.start(now, None, project))
+}
+
+#[tauri::command]
+fn switch_project(app: AppHandle, project: Option<i64>) -> CmdResult<StatusView> {
+    with_tracker(&app, |t, now| t.switch_project(now, None, project))
+}
+
+#[tauri::command]
+fn list_projects(state: tauri::State<AppState>) -> CmdResult<Vec<projects::Project>> {
+    projects::list(&state.0.lock().unwrap().conn, now_ms()).map_err(err)
+}
+
+#[tauri::command]
+fn create_project(app: AppHandle, name: String, color: String) -> CmdResult<i64> {
+    let state = app.state::<AppState>();
+    let id = projects::create(&state.0.lock().unwrap().conn, &name, &color, now_ms())?;
+    let _ = app.emit("tracker-changed", ());
+    Ok(id)
+}
+
+#[tauri::command]
+fn update_project(
+    app: AppHandle,
+    id: i64,
+    name: String,
+    color: String,
+    archived: bool,
+) -> CmdResult<()> {
+    let state = app.state::<AppState>();
+    projects::update(
+        &state.0.lock().unwrap().conn,
+        id,
+        &name,
+        &color,
+        archived,
+        now_ms(),
+    )?;
+    let _ = app.emit("tracker-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -80,6 +120,7 @@ fn get_report(
     state: tauri::State<AppState>,
     from: String,
     to: String,
+    project: Option<String>,
 ) -> CmdResult<report::Report> {
     let tracker = state.0.lock().unwrap();
     report::build(
@@ -87,6 +128,7 @@ fn get_report(
         parse_date(&from)?,
         parse_date(&to)?,
         now_ms(),
+        &report::ProjectFilter::parse(project.as_deref()),
     )
     .map_err(err)
 }
@@ -98,23 +140,39 @@ fn export_report(
     format: String,
     from: String,
     to: String,
+    project: Option<String>,
 ) -> CmdResult<()> {
     let tracker = state.0.lock().unwrap();
+    let filter = report::ProjectFilter::parse(project.as_deref());
     let data = report::build(
         &tracker.conn,
         parse_date(&from)?,
         parse_date(&to)?,
         now_ms(),
+        &filter,
     )
     .map_err(err)?;
     let employee = tracker.settings.employee_name.clone();
     let texts = i18n::texts(tracker.lang());
+    let project_label = match filter {
+        report::ProjectFilter::All => texts.all_projects.to_string(),
+        report::ProjectFilter::NoProject => texts.no_project.to_string(),
+        report::ProjectFilter::Project(id) => projects::get_ref(&tracker.conn, id)
+            .map_err(err)?
+            .map(|p| p.name)
+            .unwrap_or_default(),
+    };
     drop(tracker);
     match format.as_str() {
         "csv" => std::fs::write(&path, export::to_csv(&data, &employee, texts)).map_err(err),
-        "xlsx" => {
-            export::to_xlsx(&data, &employee, texts, std::path::Path::new(&path)).map_err(err)
-        }
+        "xlsx" => export::to_xlsx(
+            &data,
+            &employee,
+            &project_label,
+            texts,
+            std::path::Path::new(&path),
+        )
+        .map_err(err),
         other => Err(format!("Neznámý formát exportu: {other}")),
     }
 }
@@ -309,6 +367,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             start_work,
+            switch_project,
+            list_projects,
+            create_project,
+            update_project,
             pause_work,
             resume_work,
             end_work,

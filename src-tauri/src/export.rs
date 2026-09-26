@@ -51,10 +51,16 @@ fn csv_field(s: &str) -> String {
     }
 }
 
+fn project_name<'a>(name: &'a Option<String>, t: &'a Texts) -> &'a str {
+    name.as_deref().unwrap_or(t.no_project)
+}
+
 pub fn to_csv(report: &Report, employee: &str, t: &Texts) -> String {
     let sep = if t.decimal_comma { ";" } else { "," };
     let mut out = String::from("\u{FEFF}");
     out.push_str(&t.csv_headers.map(csv_field).join(sep));
+    out.push_str(sep);
+    out.push_str(&csv_field(t.project));
     out.push('\n');
     for s in &report.sessions {
         let row = [
@@ -68,6 +74,7 @@ pub fn to_csv(report: &Report, employee: &str, t: &Texts) -> String {
             csv_field(&hours(s.worked_ms, t.decimal_comma)),
             hmm(s.paused_ms),
             s.auto_pauses.to_string(),
+            csv_field(project_name(&s.project_name, t)),
         ];
         out.push_str(&row.join(sep));
         out.push('\n');
@@ -79,7 +86,14 @@ fn excel_date(date: NaiveDate) -> Result<ExcelDateTime, XlsxError> {
     ExcelDateTime::from_ymd(date.year() as u16, date.month() as u8, date.day() as u8)
 }
 
-pub fn to_xlsx(report: &Report, employee: &str, t: &Texts, path: &Path) -> Result<(), XlsxError> {
+/// `project_label` = za jaký projekt export je (filtr v přehledu).
+pub fn to_xlsx(
+    report: &Report,
+    employee: &str,
+    project_label: &str,
+    t: &Texts,
+    path: &Path,
+) -> Result<(), XlsxError> {
     let mut wb = Workbook::new();
     let bold = Format::new().set_bold();
     let header = Format::new().set_bold().set_background_color("#E8EEF6");
@@ -109,6 +123,8 @@ pub fn to_xlsx(report: &Report, employee: &str, t: &Texts, path: &Path) -> Resul
     ws.write_number(7, 1, days_worked as f64)?;
     ws.write_string(8, 0, t.summary[7])?;
     ws.write_number(8, 1, report.sessions.len() as f64)?;
+    ws.write_string(9, 0, t.project)?;
+    ws.write_string(9, 1, project_label)?;
 
     // Po dnech
     let ws = wb.add_worksheet().set_name(t.sheets[1])?;
@@ -133,10 +149,11 @@ pub fn to_xlsx(report: &Report, employee: &str, t: &Texts, path: &Path) -> Resul
 
     // Pracovní akce
     let ws = wb.add_worksheet().set_name(t.sheets[2])?;
-    for (col, title) in t.session_headers.iter().enumerate() {
+    for (col, title) in t.session_headers.iter().chain([&t.project]).enumerate() {
         ws.write_string_with_format(0, col as u16, *title, &header)?;
         ws.set_column_width(col as u16, 16)?;
     }
+    ws.set_column_width(6, 28)?;
     for (i, s) in report.sessions.iter().enumerate() {
         let row = i as u32 + 1;
         ws.write_datetime_with_format(row, 0, &excel_date(local_date(s.started_at))?, &date_fmt)?;
@@ -151,6 +168,40 @@ pub fn to_xlsx(report: &Report, employee: &str, t: &Texts, path: &Path) -> Resul
         ws.write_number_with_format(row, 3, s.worked_ms as f64 / MS_PER_DAY, &duration)?;
         ws.write_number_with_format(row, 4, s.paused_ms as f64 / MS_PER_DAY, &duration)?;
         ws.write_number(row, 5, s.auto_pauses as f64)?;
+        ws.write_string(row, 6, project_name(&s.project_name, t))?;
+    }
+
+    // Projekty
+    let percent = Format::new().set_num_format("0%");
+    let ws = wb.add_worksheet().set_name(t.projects_sheet)?;
+    ws.set_column_width(0, 32)?;
+    for (col, title) in [
+        t.project,
+        t.app_headers[1],
+        t.app_headers[2],
+        t.day_headers[5],
+    ]
+    .iter()
+    .enumerate()
+    {
+        ws.write_string_with_format(0, col as u16, *title, &header)?;
+        if col > 0 {
+            ws.set_column_width(col as u16, 14)?;
+        }
+    }
+    for (i, p) in report.projects.iter().enumerate() {
+        let row = i as u32 + 1;
+        ws.write_string(row, 0, project_name(&p.name, t))?;
+        ws.write_number_with_format(row, 1, p.worked_ms as f64 / MS_PER_DAY, &duration)?;
+        if report.worked_ms > 0 {
+            ws.write_number_with_format(
+                row,
+                2,
+                p.worked_ms as f64 / report.worked_ms as f64,
+                &percent,
+            )?;
+        }
+        ws.write_number(row, 3, p.sessions as f64)?;
     }
 
     // Aplikace
@@ -162,7 +213,6 @@ pub fn to_xlsx(report: &Report, employee: &str, t: &Texts, path: &Path) -> Resul
         ws.write_string_with_format(0, col as u16, *title, &header)?;
     }
     let total: i64 = report.apps.iter().map(|a| a.ms).sum();
-    let percent = Format::new().set_num_format("0%");
     for (i, a) in report.apps.iter().enumerate() {
         let row = i as u32 + 1;
         ws.write_string(row, 0, &a.name)?;

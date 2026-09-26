@@ -3,7 +3,7 @@
 //! Tracker nečte hodiny ani systém sám — `tick` dostane aktuální čas, dobu
 //! nečinnosti a aplikaci v popředí zvenku, takže je celý testovatelný.
 
-use crate::db;
+use crate::{db, projects};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +54,9 @@ pub struct StatusView {
     pub session_worked_ms: i64,
     pub session_paused_ms: i64,
     pub current_app: Option<String>,
+    /// Projekt běžící akce; když se nepracuje, naposledy použitý projekt
+    /// (předvybraný pro další start).
+    pub project: Option<projects::ProjectRef>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -68,6 +71,7 @@ pub struct Tracker {
     status: Status,
     session_id: Option<i64>,
     session_started_at: Option<i64>,
+    session_project: Option<i64>,
     segment_started_at: Option<i64>,
     app: Option<(i64, String)>,
     last_tick: i64,
@@ -96,6 +100,7 @@ impl Tracker {
             status: Status::Off,
             session_id: None,
             session_started_at: None,
+            session_project: None,
             segment_started_at: None,
             app: None,
             last_tick: 0,
@@ -143,17 +148,29 @@ impl Tracker {
         Ok(())
     }
 
-    pub fn start(&mut self, now: i64, app: Option<String>) -> rusqlite::Result<()> {
+    pub fn start(
+        &mut self,
+        now: i64,
+        app: Option<String>,
+        project: Option<i64>,
+    ) -> rusqlite::Result<()> {
         if self.status != Status::Off {
             return Ok(());
         }
+        let project = projects::active_id(&self.conn, project)?;
         self.conn.execute(
-            "INSERT INTO sessions (started_at, last_seen) VALUES (?1, ?1)",
-            [now],
+            "INSERT INTO sessions (started_at, last_seen, project_id) VALUES (?1, ?1, ?2)",
+            params![now, project],
         )?;
         let session = self.conn.last_insert_rowid();
+        db::set_setting(
+            &self.conn,
+            "last_project_id",
+            &project.map(|p| p.to_string()).unwrap_or_default(),
+        )?;
         self.session_id = Some(session);
         self.session_started_at = Some(now);
+        self.session_project = project;
         self.last_tick = now;
         self.last_heartbeat = now;
         self.open_segment("work", None, now)?;
@@ -181,6 +198,23 @@ impl Tracker {
         Ok(())
     }
 
+    /// Přepnutí projektu za běhu = konec akce a hned nová akce s jiným
+    /// projektem, takže každá akce patří právě k jednomu projektu.
+    pub fn switch_project(
+        &mut self,
+        now: i64,
+        app: Option<String>,
+        project: Option<i64>,
+    ) -> rusqlite::Result<()> {
+        if self.status == Status::Off
+            || projects::active_id(&self.conn, project)? == self.session_project
+        {
+            return Ok(());
+        }
+        self.end(now)?;
+        self.start(now, app, project)
+    }
+
     pub fn end(&mut self, now: i64) -> rusqlite::Result<()> {
         let Some(session) = self.session_id else {
             return Ok(());
@@ -193,6 +227,7 @@ impl Tracker {
         self.status = Status::Off;
         self.session_id = None;
         self.session_started_at = None;
+        self.session_project = None;
         self.segment_started_at = None;
         self.app = None;
         Ok(())
@@ -260,6 +295,16 @@ impl Tracker {
             )?,
             None => (0, 0),
         };
+        let project_id = match self.session_id {
+            Some(_) => self.session_project,
+            None => db::get_setting(&self.conn, "last_project_id")?
+                .and_then(|v| v.parse().ok())
+                .and_then(|id| projects::active_id(&self.conn, Some(id)).ok().flatten()),
+        };
+        let project = match project_id {
+            Some(id) => projects::get_ref(&self.conn, id)?,
+            None => None,
+        };
         Ok(StatusView {
             status: self.status,
             now,
@@ -271,6 +316,7 @@ impl Tracker {
                 Status::Working => self.app.as_ref().map(|(_, name)| name.clone()),
                 _ => None,
             },
+            project,
         })
     }
 
@@ -343,7 +389,7 @@ mod tests {
     #[test]
     fn pause_is_not_counted_as_work() {
         let mut t = tracker();
-        t.start(0, app("Excel")).unwrap();
+        t.start(0, app("Excel"), None).unwrap();
         t.pause(30 * MIN).unwrap();
         t.resume(45 * MIN, app("Excel")).unwrap();
         let v = t.view(60 * MIN).unwrap();
@@ -354,7 +400,7 @@ mod tests {
     #[test]
     fn idle_triggers_retroactive_auto_pause() {
         let mut t = tracker();
-        t.start(0, app("Excel")).unwrap();
+        t.start(0, app("Excel"), None).unwrap();
         for s in 1..=(20 * 60) {
             let now = s * 1000;
             // Uživatel přestal hýbat myší v 5. minutě.
@@ -376,7 +422,7 @@ mod tests {
     #[test]
     fn sleep_gap_pauses_at_last_tick() {
         let mut t = tracker();
-        t.start(0, app("Excel")).unwrap();
+        t.start(0, app("Excel"), None).unwrap();
         t.tick(1000, 0, app("Excel")).unwrap();
         let ev = t.tick(2 * 60 * MIN, 0, app("Excel")).unwrap();
         assert_eq!(ev, Some(TickEvent::AutoPaused { since: 1000 }));
@@ -385,7 +431,7 @@ mod tests {
     #[test]
     fn app_switches_are_recorded() {
         let mut t = tracker();
-        t.start(0, app("Excel")).unwrap();
+        t.start(0, app("Excel"), None).unwrap();
         t.tick(10 * MIN, 0, app("Chrome")).unwrap();
         t.end(15 * MIN).unwrap();
         let rows: Vec<(String, i64)> = t
@@ -403,10 +449,35 @@ mod tests {
     }
 
     #[test]
+    fn switching_project_splits_the_session() {
+        let mut t = tracker();
+        let a = projects::create(&t.conn, "A", projects::PALETTE[0], 0).unwrap();
+        let b = projects::create(&t.conn, "B", projects::PALETTE[1], 0).unwrap();
+        t.start(0, app("Excel"), Some(a)).unwrap();
+        t.switch_project(30 * MIN, app("Excel"), Some(b)).unwrap();
+        let v = t.view(45 * MIN).unwrap();
+        assert_eq!(v.project.map(|p| p.id), Some(b));
+        assert_eq!(v.session_worked_ms, 15 * MIN);
+        t.end(45 * MIN).unwrap();
+
+        let per_project: Vec<(Option<i64>, i64)> = t
+            .conn
+            .prepare("SELECT project_id, ended_at - started_at FROM sessions ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(per_project, vec![(Some(a), 30 * MIN), (Some(b), 15 * MIN)]);
+        // Po konci práce je předvybraný naposledy použitý projekt.
+        assert_eq!(t.view(50 * MIN).unwrap().project.map(|p| p.id), Some(b));
+    }
+
+    #[test]
     fn dangling_session_is_closed_at_last_seen() {
         let conn = db::open_in_memory().unwrap();
         let mut t = Tracker::new(conn).unwrap();
-        t.start(0, app("Excel")).unwrap();
+        t.start(0, app("Excel"), None).unwrap();
         t.tick(20_000, 0, app("Excel")).unwrap(); // heartbeat
                                                   // Appka spadla — nový tracker nad stejnou DB.
         let conn = std::mem::replace(&mut t.conn, db::open_in_memory().unwrap());

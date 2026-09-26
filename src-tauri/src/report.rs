@@ -1,5 +1,6 @@
 //! Přehledy za libovolné období (den / týden / měsíc = jen jiný rozsah dní).
-//! Úseky přes půlnoc se rozdělí mezi dny podle místního času.
+//! Úseky přes půlnoc se rozdělí mezi dny podle místního času. Přehled jde
+//! zúžit na jeden projekt (nebo na akce bez projektu).
 
 use chrono::{Duration, Local, NaiveDate, TimeZone};
 use rusqlite::{params, Connection};
@@ -26,6 +27,50 @@ pub struct SessionRow {
     pub worked_ms: i64,
     pub paused_ms: i64,
     pub auto_pauses: u32,
+    pub project_id: Option<i64>,
+    pub project_name: Option<String>,
+    pub project_color: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRow {
+    /// `None` = akce bez projektu
+    pub id: Option<i64>,
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub worked_ms: i64,
+    pub sessions: u32,
+}
+
+/// Filtr přehledu: "all", "none" (bez projektu) nebo id projektu.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProjectFilter {
+    All,
+    NoProject,
+    Project(i64),
+}
+
+impl ProjectFilter {
+    pub fn parse(s: Option<&str>) -> Self {
+        match s {
+            None | Some("all") | Some("") => ProjectFilter::All,
+            Some("none") => ProjectFilter::NoProject,
+            Some(id) => id
+                .parse()
+                .map(ProjectFilter::Project)
+                .unwrap_or(ProjectFilter::All),
+        }
+    }
+
+    /// SQL podmínka nad aliasem `s` (tabulka sessions).
+    fn sql(&self) -> String {
+        match self {
+            ProjectFilter::All => "1".into(),
+            ProjectFilter::NoProject => "s.project_id IS NULL".into(),
+            ProjectFilter::Project(id) => format!("s.project_id = {id}"),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +90,7 @@ pub struct Report {
     pub days: Vec<DayRow>,
     pub sessions: Vec<SessionRow>,
     pub apps: Vec<AppRow>,
+    pub projects: Vec<ProjectRow>,
 }
 
 /// Místní půlnoc daného dne jako UTC ms.
@@ -73,7 +119,9 @@ pub fn build(
     from: NaiveDate,
     to: NaiveDate,
     now: i64,
+    filter: &ProjectFilter,
 ) -> rusqlite::Result<Report> {
+    let cond = filter.sql();
     let range_start = day_start_ms(from);
     let range_end = day_start_ms(to + Duration::days(1));
 
@@ -84,15 +132,23 @@ pub fn build(
         .collect();
 
     // Segmenty zasahující do období; otevřené počítáme do teď.
-    let segments: Vec<(i64, String, Option<String>, i64, i64)> = conn
-        .prepare(
-            "SELECT session_id, kind, reason, started_at, COALESCE(ended_at, ?3)
-             FROM segments
-             WHERE started_at < ?2 AND COALESCE(ended_at, ?3) > ?1
-             ORDER BY started_at",
-        )?
+    let segments: Vec<(i64, String, Option<String>, i64, i64, Option<i64>)> = conn
+        .prepare(&format!(
+            "SELECT g.session_id, g.kind, g.reason, g.started_at,
+                    COALESCE(g.ended_at, ?3), s.project_id
+             FROM segments g JOIN sessions s ON s.id = g.session_id
+             WHERE g.started_at < ?2 AND COALESCE(g.ended_at, ?3) > ?1 AND {cond}
+             ORDER BY g.started_at"
+        ))?
         .query_map(params![range_start, range_end, now], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
         })?
         .collect::<Result<_, _>>()?;
 
@@ -109,8 +165,16 @@ pub fn build(
         .collect();
     let mut day_sessions: Vec<Vec<i64>> = vec![Vec::new(); days.len()];
     let mut per_session: HashMap<i64, (i64, i64, u32)> = HashMap::new();
+    let mut per_project: HashMap<Option<i64>, (i64, Vec<i64>)> = HashMap::new();
 
-    for (session, kind, reason, start, end) in &segments {
+    for (session, kind, reason, start, end, project) in &segments {
+        if kind == "work" {
+            let p = per_project.entry(*project).or_default();
+            p.0 += overlap(*start, *end, range_start, range_end);
+            if !p.1.contains(session) {
+                p.1.push(*session);
+            }
+        }
         let entry = per_session.entry(*session).or_default();
         if kind == "pause" && reason.as_deref() == Some("idle") && *start >= range_start {
             entry.2 += 1;
@@ -145,11 +209,12 @@ pub fn build(
     }
 
     let mut sessions: Vec<SessionRow> = conn
-        .prepare(
-            "SELECT id, started_at, ended_at FROM sessions
-             WHERE started_at < ?2 AND COALESCE(ended_at, ?3) > ?1
-             ORDER BY started_at",
-        )?
+        .prepare(&format!(
+            "SELECT s.id, s.started_at, s.ended_at, s.project_id, p.name, p.color
+             FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+             WHERE s.started_at < ?2 AND COALESCE(s.ended_at, ?3) > ?1 AND {cond}
+             ORDER BY s.started_at"
+        ))?
         .query_map(params![range_start, range_end, now], |r| {
             Ok(SessionRow {
                 id: r.get(0)?,
@@ -158,6 +223,9 @@ pub fn build(
                 worked_ms: 0,
                 paused_ms: 0,
                 auto_pauses: 0,
+                project_id: r.get(3)?,
+                project_name: r.get(4)?,
+                project_color: r.get(5)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -170,15 +238,15 @@ pub fn build(
     }
 
     let apps: Vec<AppRow> = conn
-        .prepare(
-            "SELECT app_name,
-                    SUM(MIN(COALESCE(ended_at, ?3), ?2) - MAX(started_at, ?1)) AS ms
-             FROM app_usage
-             WHERE started_at < ?2 AND COALESCE(ended_at, ?3) > ?1
-             GROUP BY app_name
+        .prepare(&format!(
+            "SELECT a.app_name,
+                    SUM(MIN(COALESCE(a.ended_at, ?3), ?2) - MAX(a.started_at, ?1)) AS ms
+             FROM app_usage a JOIN sessions s ON s.id = a.session_id
+             WHERE a.started_at < ?2 AND COALESCE(a.ended_at, ?3) > ?1 AND {cond}
+             GROUP BY a.app_name
              HAVING ms > 0
-             ORDER BY ms DESC",
-        )?
+             ORDER BY ms DESC"
+        ))?
         .query_map(params![range_start, range_end, now], |r| {
             Ok(AppRow {
                 name: r.get(0)?,
@@ -186,6 +254,23 @@ pub fn build(
             })
         })?
         .collect::<Result<_, _>>()?;
+
+    let mut projects: Vec<ProjectRow> = Vec::new();
+    for (id, (worked_ms, sessions)) in per_project {
+        let info = match id {
+            Some(id) => crate::projects::get_ref(conn, id)?,
+            None => None,
+        };
+        projects.push(ProjectRow {
+            id,
+            name: info.as_ref().map(|p| p.name.clone()),
+            color: info.map(|p| p.color),
+            worked_ms,
+            sessions: sessions.len() as u32,
+        });
+    }
+    projects.retain(|p| p.worked_ms > 0);
+    projects.sort_by(|a, b| b.worked_ms.cmp(&a.worked_ms));
 
     Ok(Report {
         from: from.format("%Y-%m-%d").to_string(),
@@ -195,6 +280,7 @@ pub fn build(
         days: day_rows,
         sessions,
         apps,
+        projects,
     })
 }
 
@@ -211,18 +297,49 @@ mod tests {
         let d2 = d1 + Duration::days(1);
         let midnight = day_start_ms(d2);
         let mut t = Tracker::new(db::open_in_memory().unwrap()).unwrap();
-        t.start(midnight - 2 * HOUR, Some("Excel".into())).unwrap();
+        t.start(midnight - 2 * HOUR, Some("Excel".into()), None)
+            .unwrap();
         t.end(midnight + HOUR).unwrap();
 
-        let r = build(&t.conn, d1, d2, midnight + 5 * HOUR).unwrap();
+        let r = build(&t.conn, d1, d2, midnight + 5 * HOUR, &ProjectFilter::All).unwrap();
         assert_eq!(r.days[0].worked_ms, 2 * HOUR);
         assert_eq!(r.days[1].worked_ms, HOUR);
         assert_eq!(r.worked_ms, 3 * HOUR);
         assert_eq!(r.sessions.len(), 1);
         assert_eq!(r.apps[0].ms, 3 * HOUR);
 
-        let only_second = build(&t.conn, d2, d2, midnight + 5 * HOUR).unwrap();
+        let only_second = build(&t.conn, d2, d2, midnight + 5 * HOUR, &ProjectFilter::All).unwrap();
         assert_eq!(only_second.worked_ms, HOUR);
         assert_eq!(only_second.apps[0].ms, HOUR);
+    }
+
+    #[test]
+    fn per_project_totals_and_filter() {
+        let d = NaiveDate::from_ymd_opt(2026, 9, 25).unwrap();
+        let start = day_start_ms(d) + 8 * HOUR;
+        let mut t = Tracker::new(db::open_in_memory().unwrap()).unwrap();
+        let a = crate::projects::create(&t.conn, "A", "#3b82c4", 0).unwrap();
+        t.start(start, Some("Excel".into()), Some(a)).unwrap();
+        t.end(start + 2 * HOUR).unwrap();
+        t.start(start + 3 * HOUR, Some("Mail".into()), None)
+            .unwrap();
+        t.end(start + 4 * HOUR).unwrap();
+
+        let all = build(&t.conn, d, d, start + 5 * HOUR, &ProjectFilter::All).unwrap();
+        assert_eq!(all.worked_ms, 3 * HOUR);
+        assert_eq!(all.projects.len(), 2);
+        assert_eq!(all.projects[0].id, Some(a));
+        assert_eq!(all.projects[0].worked_ms, 2 * HOUR);
+        assert_eq!(all.projects[1].id, None);
+
+        let only_a = build(&t.conn, d, d, start + 5 * HOUR, &ProjectFilter::Project(a)).unwrap();
+        assert_eq!(only_a.worked_ms, 2 * HOUR);
+        assert_eq!(only_a.sessions.len(), 1);
+        assert_eq!(only_a.apps.len(), 1);
+        assert_eq!(only_a.sessions[0].project_name.as_deref(), Some("A"));
+
+        let none = build(&t.conn, d, d, start + 5 * HOUR, &ProjectFilter::NoProject).unwrap();
+        assert_eq!(none.worked_ms, HOUR);
+        assert_eq!(none.apps[0].name, "Mail");
     }
 }

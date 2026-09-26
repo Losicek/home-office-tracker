@@ -30,6 +30,7 @@ rust_xlsxwriter = "0.99.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 tauri-plugin-opener = "2.5.5"
 sys-locale = "0.3.2"
+uuid = { version = "1.26.1", features = ["v4"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

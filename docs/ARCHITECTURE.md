@@ -38,6 +38,7 @@ core emits the `tracker-changed` event.
 | `report.rs` | Builds a `Report` for an inclusive local-date range: per-day rows, sessions, app totals. Clips intervals to day boundaries. |
 | `export.rs` | CSV and XLSX output from a `Report`, localized through `i18n::Texts`. |
 | `i18n.rs` | Language resolution (`system` → OS locale → supported language or English) and all user-facing strings produced in Rust. |
+| `projects.rs` | Project CRUD (archive instead of delete), color palette, totals. |
 | `platform.rs` | Foreground app name + seconds since last input, per OS. |
 
 ## State machine
@@ -67,6 +68,9 @@ core emits the `tracker-changed` event.
   `db::close_dangling_sessions` closes any open session and its segments at
   `last_seen`, so time when the app was not running never counts.
 - **App exit** (tray → Quit, Cmd+Q, shutdown) ends the current session.
+- **Switching project** during work ends the current session and immediately
+  starts a new one with the other project, so every session belongs to exactly
+  one project (or none).
 
 ## Data model
 
@@ -74,11 +78,13 @@ All timestamps are **UTC milliseconds**. Conversion to local time happens only
 in `report.rs` / `export.rs` / the UI.
 
 ```sql
-sessions  (id, started_at, ended_at NULL, last_seen)          -- one "work session"
+projects  (id, uuid UNIQUE, name, color, archived, created_at, updated_at)
+sessions  (id, started_at, ended_at NULL, last_seen,
+           project_id NULL → projects)                         -- one "work session"
 segments  (id, session_id, kind 'work'|'pause',
            reason NULL|'manual'|'idle', started_at, ended_at NULL)
 app_usage (id, session_id, app_name, started_at, ended_at NULL) -- only while working
-settings  (key, value)   -- idle_minutes, employee_name, language, theme
+settings  (key, value)   -- idle_minutes, employee_name, language, theme, last_project_id
 ```
 
 Invariants:
@@ -96,7 +102,9 @@ Location: `~/Library/Application Support/com.losicek.homeofficetracker/`
 
 ## Reports
 
-`report::build(conn, from, to, now)` takes an **inclusive local-date range**.
+`report::build(conn, from, to, now, filter)` takes an **inclusive local-date
+range** and a `ProjectFilter` (`All`, `NoProject`, `Project(id)`), which
+applies to days, sessions, apps and per-project totals alike.
 Week and month are just different ranges computed in the UI (`format.ts →
 periodRange`, weeks start on Monday). Open intervals are counted up to `now`.
 Every interval is clipped to each local day `[midnight, next midnight)`, which

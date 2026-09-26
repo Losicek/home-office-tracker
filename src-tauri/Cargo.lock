@@ -1515,6 +1515,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "uuid",
  "windows 0.62.2",
 ]
 

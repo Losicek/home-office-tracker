@@ -16,6 +16,11 @@ nejsou, dají se přidat později (viz Roadmap).
 - **Dnes:** datum, hodiny, tlačítka *Začít pracovat* / *Pauza* / *Pokračovat* /
   *Konec práce*, stopky aktuální pracovní akce, aplikace, ve které se právě
   pracuje, dnešní součet, seznam dnešních pracovních akcí a čas po aplikacích.
+- **Projekty:** každý si vytváří vlastní projekty (název + barva), před
+  začátkem práce jeden vybere a za běhu ho může přepnout (přepnutí = nová
+  pracovní akce). Přehledy ukazují čas po projektech a jdou filtrovat na jeden
+  projekt. Exporty mají sloupec a list „Projekty“. Projekty se nemažou, jen
+  archivují.
 - **Více pracovních akcí za den.** Každé *Začít pracovat → Konec práce* je
   samostatná akce.
 - **Automatická pauza** po N minutách bez pohybu myši nebo klávesnice
@@ -93,7 +98,8 @@ ms a na místní čas se převádějí až v přehledech.
 - `sessions`: pracovní akce (`started_at`, `ended_at`, `last_seen`)
 - `segments`: úseky `work` / `pause` (s důvodem `manual` / `idle`)
 - `app_usage`: úseky s aplikací v popředí, jen během práce
-- `settings`: jméno zaměstnance, limit nečinnosti, jazyk a vzhled
+- `projects`: projekty (`uuid`, název, barva, `archived`, `updated_at`), na které odkazuje `sessions.project_id`
+- `settings`: jméno zaměstnance, limit nečinnosti, jazyk, vzhled, naposledy použitý projekt
 
 Podrobný popis stavového automatu, datového modelu a platformních API je v
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (anglicky).
