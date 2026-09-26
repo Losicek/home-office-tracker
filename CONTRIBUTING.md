@@ -130,14 +130,26 @@ Apple, and staples the ticket. It needs a one-time setup:
 Then run `APPLE_TEAM_ID=<TEAMID> scripts/release-mac.sh`. Without the
 variable it uses the maintainer's team.
 
+## Updates (in-app updater)
+
+Installed apps check
+`https://github.com/Losicek/home-office-tracker/releases/latest/download/latest.json`.
+CI builds signed update bundles when you pass
+`--config src-tauri/tauri.updater.conf.json` and the
+`TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` secrets exist. The public key is in
+`tauri.conf.json → plugins.updater.pubkey`. **If the private key is lost,
+installed apps can no longer be updated**, so keep a backup of it.
+Build with `--features app-store` to disable the updater (Mac App Store).
+
 ## Releasing
 
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml` and
    `src-tauri/tauri.conf.json` (keep them equal).
 2. Commit, then `git tag vX.Y.Z && git push --tags`.
-3. CI builds the installers and attaches them to a draft GitHub release.
-   Replace the macOS `.dmg` with the notarized one from
-   `scripts/release-mac.sh`, write release notes, and publish.
+3. CI builds, signs and notarizes the installers and update bundles and
+   attaches them (plus `latest.json`) to a draft GitHub release.
+4. Write release notes and publish. Installed apps are offered the update
+   within 6 hours.
 
 ## Pull requests
 
