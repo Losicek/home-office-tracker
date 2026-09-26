@@ -45,6 +45,10 @@ Everything stays on the employee's computer: no account, no server, no cloud.
   The default follows the system language and can be changed in Settings.
   Notifications, the tray menu and exports are translated too.
 - **Light & dark mode:** follows the system or can be forced in Settings.
+- **iCloud sync (macOS):** optionally share work sessions and projects
+  between your Macs signed in to the same iCloud. Each Mac writes only its own
+  files, so nothing can be overwritten. Reports show which Mac a session came
+  from.
 - **Automatic updates:** the app checks GitHub releases on start and every
   6 hours and offers a one-click update (signed; disabled in the Mac App
   Store build, where the store updates the app).
@@ -61,7 +65,8 @@ a covert monitoring tool:
   screenshots.
 - On macOS no Accessibility or Screen Recording permission is required.
 - Data is stored locally in SQLite. Nothing is sent anywhere, and the employee
-  decides what to export and share.
+  decides what to export and share. The optional iCloud sync only uses the
+  user's own private iCloud (app container), never a third-party server.
 
 ## Download & install
 

@@ -7,6 +7,8 @@
 #      Accounts → Manage Certificates → + → Developer ID Application)
 #   2. xcrun notarytool store-credentials "homeoffice-notary" \
 #        --apple-id <apple-id> --team-id W3LT8G9294
+#   3. provisioning profil Developer ID s iCloudem v
+#      ~/.tauri/profiles/HOT_Developer_ID.provisionprofile
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
@@ -24,9 +26,19 @@ if [ -z "$IDENTITY" ]; then
 fi
 echo "Podpis: $(echo "$CERT_LINE" | cut -d'"' -f2) [$IDENTITY]"
 
+# Profil Developer ID s iCloudem (Apple Developer → Profiles); bez něj by
+# macOS appku s iCloud entitlementy nespustil.
+PROFILE="${DEVELOPER_ID_PROFILE:-$HOME/.tauri/profiles/HOT_Developer_ID.provisionprofile}"
+if [ ! -f "$PROFILE" ]; then
+  echo "Chybí provisioning profil: $PROFILE" >&2
+  exit 1
+fi
+mkdir -p src-tauri/profiles
+cp "$PROFILE" src-tauri/profiles/developer-id.provisionprofile
+
 VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
 export APPLE_SIGNING_IDENTITY="$IDENTITY"
-npm run tauri build -- --target universal-apple-darwin
+npm run tauri build -- --target universal-apple-darwin --config src-tauri/tauri.icloud.conf.json
 
 BUNDLE=src-tauri/target.nosync/universal-apple-darwin/release/bundle
 APP="$BUNDLE/macos/Home Office Tracker.app"

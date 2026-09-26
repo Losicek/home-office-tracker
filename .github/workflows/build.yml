@@ -7,7 +7,8 @@
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) for updates; for macOS signing
 # APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
-# APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID.
+# APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID,
+# APPLE_PROVISIONING_PROFILE (base64 Developer ID profile with iCloud).
 # Without the Apple secrets the macOS build is simply unsigned.
 name: build
 
@@ -26,7 +27,7 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            args: --target universal-apple-darwin
+            args: --target universal-apple-darwin --config src-tauri/tauri.icloud.conf.json
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
           - os: windows-latest
             args: ""
@@ -47,6 +48,14 @@ jobs:
       - run: npm ci
       - run: cargo test
         working-directory: src-tauri
+      # Profil Developer ID s iCloudem (pro synchronizaci mezi Macy).
+      - name: Provisioning profile
+        if: matrix.os == 'macos-latest'
+        env:
+          PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+        run: |
+          mkdir -p src-tauri/profiles
+          echo "$PROFILE" | base64 --decode > src-tauri/profiles/developer-id.provisionprofile
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

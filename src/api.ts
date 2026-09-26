@@ -59,6 +59,17 @@ export interface SessionRow {
   projectId: number | null;
   projectName: string | null;
   projectColor: string | null;
+  /** Jen u akcí z jiného počítače (synchronizace). */
+  deviceName: string | null;
+}
+
+export interface SyncStatus {
+  supported: boolean;
+  available: boolean | null;
+  enabled: boolean;
+  lastSync: number | null;
+  error: string | null;
+  devices: { name: string; updatedAt: number }[];
 }
 
 export interface ProjectRow {
@@ -93,6 +104,7 @@ export interface Settings {
   /** "system" nebo kód jazyka */
   language: string;
   theme: ThemeSetting;
+  icloudSync: boolean;
   /** Jen pro čtení — jazyk, který se opravdu použije. */
   resolvedLanguage?: string;
 }
@@ -120,5 +132,7 @@ export const api = {
     project: ProjectFilter = "all",
   ) => invoke<void>("export_report", { path, format, from, to, project }),
   settings: () => invoke<Settings>("get_settings"),
+  syncStatus: () => invoke<SyncStatus>("sync_status"),
+  syncNow: () => invoke<void>("sync_now"),
   saveSettings: (settings: Settings) => invoke<Settings>("save_settings", { settings }),
 };

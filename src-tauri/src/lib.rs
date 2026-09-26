@@ -4,6 +4,7 @@ mod i18n;
 pub mod platform;
 mod projects;
 mod report;
+mod sync;
 mod tracker;
 
 use chrono::NaiveDate;
@@ -17,6 +18,39 @@ use tauri_plugin_notification::NotificationExt;
 use tracker::{Settings, Status, StatusView, TickEvent, Tracker};
 
 struct AppState(Mutex<Tracker>);
+
+/// Stav synchronizace přes iCloud (mimo tracker, aby se nečekalo na zámek).
+#[derive(Default)]
+struct SyncState {
+    /// Kontejner iCloudu; `None` = zatím nezjištěno nebo nedostupné.
+    root: Option<std::path::PathBuf>,
+    /// Zjišťovalo se a kontejner není (iCloud vypnutý, nepodepsaná appka…).
+    unavailable: bool,
+    last_sync: Option<i64>,
+    error: Option<String>,
+}
+
+struct SyncHandle(Mutex<SyncState>);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceView {
+    name: String,
+    updated_at: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncStatusView {
+    /// Platforma synchronizaci umí (macOS).
+    supported: bool,
+    /// Kontejner iCloudu je k dispozici (None = ještě nezjištěno).
+    available: Option<bool>,
+    enabled: bool,
+    last_sync: Option<i64>,
+    error: Option<String>,
+    devices: Vec<DeviceView>,
+}
 
 type CmdResult<T> = Result<T, String>;
 
@@ -193,6 +227,120 @@ fn settings_view(tracker: &Tracker) -> SettingsView {
     }
 }
 
+#[tauri::command]
+fn sync_status(app: AppHandle) -> CmdResult<SyncStatusView> {
+    let enabled = app
+        .state::<AppState>()
+        .0
+        .lock()
+        .unwrap()
+        .settings
+        .icloud_sync;
+    let devices = {
+        let state = app.state::<AppState>();
+        let tracker = state.0.lock().unwrap();
+        let mut stmt = tracker
+            .conn
+            .prepare("SELECT name, updated_at FROM devices ORDER BY name")
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(DeviceView {
+                    name: r.get(0)?,
+                    updated_at: r.get(1)?,
+                })
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        rows
+    };
+    let sync = app.state::<SyncHandle>();
+    let sync = sync.0.lock().unwrap();
+    Ok(SyncStatusView {
+        supported: cfg!(target_os = "macos"),
+        available: if sync.root.is_some() {
+            Some(true)
+        } else if sync.unavailable {
+            Some(false)
+        } else {
+            None
+        },
+        enabled,
+        last_sync: sync.last_sync,
+        error: sync.error.clone(),
+        devices,
+    })
+}
+
+/// Synchronizace hned (tlačítko v Nastavení); běží mimo hlavní vlákno.
+#[tauri::command]
+async fn sync_now(app: AppHandle) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || run_sync(&app))
+        .await
+        .map_err(err)
+}
+
+/// Jeden průchod synchronizace: zjistit kontejner, zapsat svoje, načíst cizí.
+fn run_sync(app: &AppHandle) {
+    let enabled = app
+        .state::<AppState>()
+        .0
+        .lock()
+        .unwrap()
+        .settings
+        .icloud_sync;
+    if !enabled {
+        return;
+    }
+    let root = {
+        let sync = app.state::<SyncHandle>();
+        let known = sync.0.lock().unwrap().root.clone();
+        match known {
+            Some(root) => Some(root),
+            None => {
+                // Může trvat — proto bez držení zámku.
+                let found = platform::icloud_container().map(|c| c.join("Data"));
+                let mut s = sync.0.lock().unwrap();
+                s.root = found.clone();
+                s.unavailable = found.is_none();
+                found
+            }
+        }
+    };
+    let Some(root) = root else { return };
+    let device_name = platform::device_name();
+    let result = {
+        let state = app.state::<AppState>();
+        let tracker = state.0.lock().unwrap();
+        sync::export(&tracker.conn, &root, &device_name, now_ms())
+            .and_then(|_| sync::import(&tracker.conn, &root))
+    };
+    let sync = app.state::<SyncHandle>();
+    let mut s = sync.0.lock().unwrap();
+    match result {
+        Ok(changed) => {
+            s.last_sync = Some(now_ms());
+            s.error = None;
+            drop(s);
+            if changed {
+                let _ = app.emit("tracker-changed", ());
+            }
+        }
+        Err(e) => s.error = Some(e),
+    }
+}
+
+fn spawn_sync(app: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        loop {
+            run_sync(&app);
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    });
+}
+
 /// Vestavěné aktualizace (GitHub); ve verzi pro App Store vypnuté.
 #[tauri::command]
 fn updates_enabled() -> bool {
@@ -211,6 +359,10 @@ fn save_settings(app: AppHandle, settings: Settings) -> CmdResult<SettingsView> 
     tracker.save_settings(settings).map_err(err)?;
     let view = settings_view(&tracker);
     drop(tracker);
+    if view.settings.icloud_sync {
+        let app = app.clone();
+        std::thread::spawn(move || run_sync(&app));
+    }
     if let (Some(tray), Ok(menu)) = (
         app.tray_by_id("main"),
         tray_menu(&app, i18n::texts(view.resolved_language)),
@@ -364,7 +516,9 @@ pub fn run() {
             }
             tray.build(app)?;
 
+            app.manage(SyncHandle(Mutex::new(SyncState::default())));
             spawn_ticker(app.handle().clone());
+            spawn_sync(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -388,6 +542,8 @@ pub fn run() {
             export_report,
             get_settings,
             updates_enabled,
+            sync_status,
+            sync_now,
             save_settings
         ])
         .build(tauri::generate_context!())
@@ -398,6 +554,8 @@ pub fn run() {
             // Ukončení appky = konec práce, ať nezůstane otevřená akce.
             if let Some(state) = app.try_state::<AppState>() {
                 let _ = state.0.lock().unwrap().end(now_ms());
+                // Ať ostatní počítače hned vidí ukončenou akci.
+                run_sync(app);
             }
         }
         #[cfg(target_os = "macos")]

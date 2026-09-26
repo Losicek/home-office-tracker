@@ -38,6 +38,7 @@ import {
   QuickCreateProject,
   useProjects,
 } from "./projects";
+import { SyncCard } from "./sync";
 import { UpdateBanner, useUpdater } from "./updater";
 import "./App.css";
 
@@ -300,6 +301,11 @@ function SessionList({ sessions }: { sessions: SessionRow[] }) {
             <td className="project-cell">
               <ProjectDot color={s.projectColor} />
               <span className={s.projectName ? "" : "muted"}>{s.projectName ?? t.noProject}</span>
+              {s.deviceName && (
+                <span className="device-badge" title={s.deviceName}>
+                  💻 {s.deviceName}
+                </span>
+              )}
             </td>
             <td className="num">{duration(s.workedMs)}</td>
             <td className="num">
@@ -634,6 +640,11 @@ function SettingsView({
           </div>
         </div>
       </section>
+
+      <SyncCard
+        settings={settings}
+        onToggle={(icloudSync) => saveNow({ ...settings, icloudSync })}
+      />
 
       <form className="card settings" onSubmit={submit}>
         <h2>{t.settingsTitle}</h2>

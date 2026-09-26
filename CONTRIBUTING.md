@@ -127,6 +127,13 @@ Apple, and staples the ticket. It needs a one-time setup:
    `xcrun notarytool store-credentials "homeoffice-notary" --apple-id <you> --team-id <TEAMID>`
    (use an app-specific password from account.apple.com).
 
+3. A **Developer ID provisioning profile** for the App ID with iCloud
+   (container `iCloud.com.losicek.homeofficetracker`) at
+   `~/.tauri/profiles/HOT_Developer_ID.provisionprofile`, or point
+   `DEVELOPER_ID_PROFILE` to it. It is embedded via
+   `src-tauri/tauri.icloud.conf.json` together with
+   `entitlements/developer-id.plist`.
+
 Then run `APPLE_TEAM_ID=<TEAMID> scripts/release-mac.sh`. Without the
 variable it uses the maintainer's team.
 

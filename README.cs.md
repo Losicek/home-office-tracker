@@ -57,6 +57,12 @@ nejsou, dají se přidat později (viz Roadmap).
 - **O aplikaci** v Nastavení: „Zdarma pro všechny navždy“, logo a odkaz na
   www.losenicky.design (otevírá se v prohlížeči přes tauri-plugin-opener,
   povolena je jen tahle doména).
+- **Synchronizace přes iCloud (macOS):** volitelně (Nastavení) sdílí
+  pracovní akce a projekty mezi Macy se stejným iCloudem. Každý Mac zapisuje
+  jen do své složky v kontejneru `iCloud.com.losicek.homeofficetracker`
+  (JSON po měsících), ostatní jen čtou, takže nehrozí konflikty. U akcí
+  z jiného Macu je v přehledu vidět jeho název. Vyžaduje podepsanou appku
+  s profilem Developer ID (`~/.tauri/profiles/HOT_Developer_ID.provisionprofile`).
 - **Automatické aktualizace:** appka po spuštění a pak každých 6 hodin
   zkontroluje vydání na GitHubu a nabídne aktualizaci jedním kliknutím
   (podepsané klíčem v `~/.tauri/home-office-tracker.key`, heslo je v

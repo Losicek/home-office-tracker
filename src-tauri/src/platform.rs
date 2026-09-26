@@ -30,6 +30,64 @@ mod imp {
         let app = workspace.frontmostApplication()?;
         app.localizedName().map(|name| name.to_string())
     }
+
+    /// Kontejner iCloudu appky, nebo `None` (nepřihlášený iCloud, vypnutý
+    /// iCloud Drive, nepodepsaná appka bez entitlementů). Může blokovat —
+    /// nevolat z hlavního vlákna.
+    pub fn icloud_container() -> Option<std::path::PathBuf> {
+        use objc2_foundation::{NSFileManager, NSString};
+        let id = NSString::from_str(super::ICLOUD_CONTAINER);
+        let url = NSFileManager::defaultManager().URLForUbiquityContainerIdentifier(Some(&id))?;
+        url.path().map(|p| std::path::PathBuf::from(p.to_string()))
+    }
+
+    /// Soubor, který iCloud drží jen v cloudu (`.jmeno.icloud`), si vyžádá
+    /// ke stažení; při dalším průchodu už bude na disku.
+    pub fn request_download(path: &std::path::Path) {
+        use objc2_foundation::{NSFileManager, NSString, NSURL};
+        let path = NSString::from_str(&path.to_string_lossy());
+        let url = NSURL::fileURLWithPath(&path);
+        let _ = NSFileManager::defaultManager().startDownloadingUbiquitousItemAtURL_error(&url);
+    }
+
+    #[link(name = "SystemConfiguration", kind = "framework")]
+    extern "C" {
+        fn SCDynamicStoreCopyComputerName(
+            store: *const std::ffi::c_void,
+            encoding: *mut u32,
+        ) -> *const std::ffi::c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringGetCString(
+            s: *const std::ffi::c_void,
+            buf: *mut std::ffi::c_char,
+            size: isize,
+            encoding: u32,
+        ) -> u8;
+        fn CFRelease(cf: *const std::ffi::c_void);
+    }
+
+    /// Název počítače ze Nastavení systému („MacBook Pro uživatele …“).
+    pub fn device_name() -> String {
+        const UTF8: u32 = 0x0800_0100;
+        unsafe {
+            let name = SCDynamicStoreCopyComputerName(std::ptr::null(), std::ptr::null_mut());
+            if name.is_null() {
+                return "Mac".into();
+            }
+            let mut buf = [0 as std::ffi::c_char; 256];
+            let ok = CFStringGetCString(name, buf.as_mut_ptr(), buf.len() as isize, UTF8);
+            CFRelease(name);
+            if ok == 0 {
+                return "Mac".into();
+            }
+            std::ffi::CStr::from_ptr(buf.as_ptr())
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -85,6 +143,16 @@ mod imp {
             let path = String::from_utf16_lossy(&buf[..len as usize]);
             Some(file_description(&buf[..len as usize]).unwrap_or_else(|| exe_stem(&path)))
         }
+    }
+
+    pub fn icloud_container() -> Option<std::path::PathBuf> {
+        None
+    }
+
+    pub fn request_download(_path: &std::path::Path) {}
+
+    pub fn device_name() -> String {
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into())
     }
 
     fn exe_stem(path: &str) -> String {
@@ -157,6 +225,16 @@ mod imp {
     pub fn frontmost_app() -> Option<String> {
         None
     }
+    pub fn icloud_container() -> Option<std::path::PathBuf> {
+        None
+    }
+    pub fn request_download(_path: &std::path::Path) {}
+    pub fn device_name() -> String {
+        "PC".into()
+    }
 }
 
-pub use imp::{frontmost_app, idle_seconds};
+pub use imp::{device_name, frontmost_app, icloud_container, idle_seconds, request_download};
+
+/// Musí odpovídat iCloud kontejneru v Apple Developer účtu a entitlementům.
+pub const ICLOUD_CONTAINER: &str = "iCloud.com.losicek.homeofficetracker";

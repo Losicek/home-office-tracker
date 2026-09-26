@@ -30,6 +30,9 @@ pub struct Settings {
     pub language: String,
     /// "system" | "light" | "dark"
     pub theme: String,
+    /// Synchronizace přes iCloud (jen macOS s podepsanou appkou).
+    #[serde(default)]
+    pub icloud_sync: bool,
 }
 
 impl Default for Settings {
@@ -39,6 +42,7 @@ impl Default for Settings {
             employee_name: String::new(),
             language: "system".into(),
             theme: "system".into(),
+            icloud_sync: false,
         }
     }
 }
@@ -94,6 +98,9 @@ impl Tracker {
         if let Some(v) = db::get_setting(&conn, "theme")? {
             settings.theme = v;
         }
+        if let Some(v) = db::get_setting(&conn, "icloud_sync")? {
+            settings.icloud_sync = v == "1";
+        }
         Ok(Tracker {
             conn,
             settings,
@@ -135,6 +142,7 @@ impl Tracker {
             } else {
                 "system".into()
             },
+            icloud_sync: settings.icloud_sync,
         };
         db::set_setting(
             &self.conn,
@@ -144,6 +152,11 @@ impl Tracker {
         db::set_setting(&self.conn, "employee_name", &settings.employee_name)?;
         db::set_setting(&self.conn, "language", &settings.language)?;
         db::set_setting(&self.conn, "theme", &settings.theme)?;
+        db::set_setting(
+            &self.conn,
+            "icloud_sync",
+            if settings.icloud_sync { "1" } else { "0" },
+        )?;
         self.settings = settings;
         Ok(())
     }
@@ -159,8 +172,9 @@ impl Tracker {
         }
         let project = projects::active_id(&self.conn, project)?;
         self.conn.execute(
-            "INSERT INTO sessions (started_at, last_seen, project_id) VALUES (?1, ?1, ?2)",
-            params![now, project],
+            "INSERT INTO sessions (started_at, last_seen, project_id, uuid)
+             VALUES (?1, ?1, ?2, ?3)",
+            params![now, project, uuid::Uuid::new_v4().to_string()],
         )?;
         let session = self.conn.last_insert_rowid();
         db::set_setting(

@@ -39,7 +39,8 @@ core emits the `tracker-changed` event.
 | `export.rs` | CSV and XLSX output from a `Report`, localized through `i18n::Texts`. |
 | `i18n.rs` | Language resolution (`system` → OS locale → supported language or English) and all user-facing strings produced in Rust. |
 | `projects.rs` | Project CRUD (archive instead of delete), color palette, totals. |
-| `platform.rs` | Foreground app name + seconds since last input, per OS. |
+| `platform.rs` | Foreground app name, seconds since last input, iCloud container, computer name, per OS. |
+| `sync.rs` | Multi-device sync through a shared folder (the app's iCloud container on macOS). |
 
 ## State machine
 
@@ -79,12 +80,16 @@ in `report.rs` / `export.rs` / the UI.
 
 ```sql
 projects  (id, uuid UNIQUE, name, color, archived, created_at, updated_at)
-sessions  (id, started_at, ended_at NULL, last_seen,
-           project_id NULL → projects)                         -- one "work session"
+sessions  (id, uuid UNIQUE, started_at, ended_at NULL, last_seen,
+           project_id NULL → projects,
+           device_id NULL)   -- NULL = this computer, else synced from device_id
 segments  (id, session_id, kind 'work'|'pause',
            reason NULL|'manual'|'idle', started_at, ended_at NULL)
 app_usage (id, session_id, app_name, started_at, ended_at NULL) -- only while working
-settings  (key, value)   -- idle_minutes, employee_name, language, theme, last_project_id
+settings  (key, value)   -- idle_minutes, employee_name, language, theme, last_project_id,
+                         -- icloud_sync, device_id, sync_last_export, sync_device_name
+devices    (id, name, updated_at)            -- other Macs known from sync
+sync_files (path, modified, size)            -- sync files already imported
 ```
 
 Invariants:
@@ -99,6 +104,34 @@ Schema changes: bump `SCHEMA_VERSION` in `db.rs` and add an
 
 Location: `~/Library/Application Support/com.losicek.homeofficetracker/`
 (macOS), `%APPDATA%\com.losicek.homeofficetracker\` (Windows).
+
+## Sync (iCloud)
+
+The SQLite database is **never** put into iCloud (concurrent writers would
+corrupt it). Instead every device exports its own data as JSON into its own
+folder, and only reads the others':
+
+```
+<iCloud container>/Data/devices/<device-id>/device.json
+                                          /projects.json          all known projects
+                                          /sessions-YYYY-MM.json  own sessions by start month (UTC)
+```
+
+- One writer per file, so there are no conflicts. Writes are atomic (temp
+  file + rename).
+- Every 60 s (and right after enabling it, and on quit): export changed months
+  and projects since `sync_last_export`, then import changed files of other
+  devices (tracked in `sync_files` by mtime + size). Files still in the cloud
+  (`.name.icloud`) are requested for download and picked up on the next pass.
+- Imported sessions get `sessions.device_id`. They are replaced as a whole by
+  `uuid` on re-import and never touch local sessions. A session still running
+  on another Mac counts until its `last_seen`.
+- Projects merge by `uuid`, and the newer `updated_at` wins (rename, color,
+  archive).
+- The container requires the app to be signed with the iCloud entitlements
+  (`entitlements/developer-id.plist`) and an embedded Developer ID
+  provisioning profile (`tauri.icloud.conf.json`). No sandbox is needed for the
+  Developer ID build. Unsigned or dev builds just report iCloud as unavailable.
 
 ## Reports
 

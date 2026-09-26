@@ -5,11 +5,14 @@
 //! - `segments`  — souvislé úseky práce (`work`) a pauz (`pause`) uvnitř akce
 //! - `app_usage` — úseky, kdy byla v popředí daná aplikace (jen během práce)
 //! - `projects`  — projekty, které si uživatel vytváří; akce patří k projektu
+//! - `devices`   — ostatní počítače ze synchronizace (iCloud); akce odjinud
+//!                 mají `sessions.device_id`, akce z tohoto počítače NULL
+//! - `sync_files`— které synchronizační soubory už jsou načtené (mtime, size)
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -76,6 +79,24 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              CREATE INDEX sessions_project ON sessions(project_id);",
         )?;
     }
+    if version < 3 {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN uuid TEXT;
+             ALTER TABLE sessions ADD COLUMN device_id TEXT;
+             UPDATE sessions SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL;
+             CREATE UNIQUE INDEX sessions_uuid ON sessions(uuid);
+             CREATE TABLE devices (
+                 id         TEXT PRIMARY KEY,
+                 name       TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE sync_files (
+                 path     TEXT PRIMARY KEY,
+                 modified INTEGER NOT NULL,
+                 size     INTEGER NOT NULL
+             );",
+        )?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -85,7 +106,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 /// appka vůbec neběžela.
 pub fn close_dangling_sessions(conn: &Connection) -> rusqlite::Result<usize> {
     let open: Vec<(i64, i64)> = conn
-        .prepare("SELECT id, last_seen FROM sessions WHERE ended_at IS NULL")?
+        .prepare("SELECT id, last_seen FROM sessions WHERE ended_at IS NULL AND device_id IS NULL")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
     for (id, last_seen) in &open {
@@ -128,4 +149,14 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Resul
         params![key, value],
     )?;
     Ok(())
+}
+
+/// Trvalé ID tohoto počítače pro synchronizaci (vznikne při prvním použití).
+pub fn device_id(conn: &Connection) -> rusqlite::Result<String> {
+    if let Some(id) = get_setting(conn, "device_id")? {
+        return Ok(id);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    set_setting(conn, "device_id", &id)?;
+    Ok(id)
 }
