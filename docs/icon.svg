@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF7043"/>
+      <stop offset="1" stop-color="#E03A17"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#7A1A05" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <!-- podklad: zaoblený čtverec podle mřížky macOS ikon -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)" filter="url(#shadow)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#gloss)"/>
+
+  <!-- domeček -->
+  <path filter="url(#soft)" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="36" stroke-linejoin="round"
+        d="M512 258 L786 486 L732 486 L732 752 L292 752 L292 486 L238 486 Z"/>
+
+  <!-- hodiny -->
+  <circle cx="512" cy="590" r="132" fill="#F04924"/>
+  <circle cx="512" cy="590" r="132" fill="none" stroke="#C8330F" stroke-opacity="0.35" stroke-width="6"/>
+  <g stroke="#FFFFFF" stroke-linecap="round">
+    <line x1="512" y1="590" x2="512" y2="500" stroke-width="26"/>
+    <line x1="512" y1="590" x2="578" y2="628" stroke-width="26"/>
+  </g>
+  <circle cx="512" cy="590" r="18" fill="#FFFFFF"/>
+</svg>

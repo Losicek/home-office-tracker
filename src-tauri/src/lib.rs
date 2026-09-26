@@ -6,16 +6,16 @@ mod projects;
 mod report;
 mod sync;
 mod tracker;
+mod tray;
 
 use chrono::NaiveDate;
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
-use tracker::{Settings, Status, StatusView, TickEvent, Tracker};
+use tracker::{Settings, StatusView, TickEvent, Tracker};
 
 struct AppState(Mutex<Tracker>);
 
@@ -77,8 +77,9 @@ fn with_tracker(
     f(&mut tracker, now).map_err(err)?;
     let view = tracker.view(now).map_err(err)?;
     let texts = i18n::texts(tracker.lang());
+    let names = projects::active_names(&tracker.conn).unwrap_or_default();
     drop(tracker);
-    update_tray(app, &view, texts);
+    tray::refresh(app, &view, texts, &names);
     let _ = app.emit("tracker-changed", ());
     Ok(view)
 }
@@ -109,6 +110,7 @@ fn list_projects(state: tauri::State<AppState>) -> CmdResult<Vec<projects::Proje
 fn create_project(app: AppHandle, name: String, color: String) -> CmdResult<i64> {
     let state = app.state::<AppState>();
     let id = projects::create(&state.0.lock().unwrap().conn, &name, &color, now_ms())?;
+    refresh_tray_now(&app);
     let _ = app.emit("tracker-changed", ());
     Ok(id)
 }
@@ -363,20 +365,8 @@ fn save_settings(app: AppHandle, settings: Settings) -> CmdResult<SettingsView> 
         let app = app.clone();
         std::thread::spawn(move || run_sync(&app));
     }
-    if let (Some(tray), Ok(menu)) = (
-        app.tray_by_id("main"),
-        tray_menu(&app, i18n::texts(view.resolved_language)),
-    ) {
-        let _ = tray.set_menu(Some(menu));
-    }
+    refresh_tray_now(&app);
     Ok(view)
-}
-
-fn tray_menu(app: &AppHandle, t: &i18n::Texts) -> tauri::Result<Menu<tauri::Wry>> {
-    let show = MenuItem::with_id(app, "show", t.tray_show, true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", t.tray_quit, true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    Menu::with_items(app, &[&show, &separator, &quit])
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -387,30 +377,44 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn format_duration(ms: i64) -> String {
-    let minutes = ms / 60_000;
-    format!("{}:{:02}", minutes / 60, minutes % 60)
-}
-
-/// Stav v liště: na macOS text vedle ikony, na Windows tooltip.
-fn update_tray(app: &AppHandle, view: &StatusView, t: &i18n::Texts) {
-    let Some(tray) = app.tray_by_id("main") else {
+/// Obnoví menu v liště podle aktuálního stavu (např. po změně jazyka nebo
+/// projektů).
+fn refresh_tray_now(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let tracker = state.0.lock().unwrap();
+    let Ok(view) = tracker.view(now_ms()) else {
         return;
     };
-    let text = match view.status {
-        Status::Off => None,
-        Status::Working => Some(format!("▶ {}", format_duration(view.session_worked_ms))),
-        Status::Paused | Status::AutoPaused => {
-            Some(format!("⏸ {}", format_duration(view.session_worked_ms)))
+    let texts = i18n::texts(tracker.lang());
+    let names = projects::active_names(&tracker.conn).unwrap_or_default();
+    drop(tracker);
+    tray::refresh(app, &view, texts, &names);
+}
+
+fn handle_tray_action(app: &AppHandle, action: tray::Action) {
+    use tray::Action;
+    let result = match action {
+        Action::StartLast => with_tracker(app, |t, now| {
+            let last = t.view(now)?.project.map(|p| p.id);
+            t.start(now, None, last)
+        }),
+        Action::Start(project) => with_tracker(app, |t, now| t.start(now, None, project)),
+        Action::Switch(project) => with_tracker(app, |t, now| t.switch_project(now, None, project)),
+        Action::Pause => with_tracker(app, |t, now| t.pause(now)),
+        Action::Resume => with_tracker(app, |t, now| t.resume(now, None)),
+        Action::End => with_tracker(app, |t, now| t.end(now)),
+        Action::Show => {
+            show_main_window(app);
+            return;
+        }
+        Action::Quit => {
+            app.exit(0);
+            return;
         }
     };
-    #[cfg(target_os = "macos")]
-    let _ = tray.set_title(text.as_deref());
-    let tooltip = match &text {
-        Some(t) => format!("Home Office Tracker — {t}"),
-        None => format!("Home Office Tracker — {}", t.tray_not_working),
-    };
-    let _ = tray.set_tooltip(Some(tooltip));
+    if let Err(e) = result {
+        eprintln!("akce z lišty selhala: {e}");
+    }
 }
 
 /// Na macOS drží `NSWorkspace` aktuální aplikaci v popředí jen díky run loopu
@@ -443,10 +447,11 @@ fn spawn_ticker(app: AppHandle) {
         let view = tracker.view(now).ok();
         let idle_minutes = tracker.settings.idle_minutes;
         let texts = i18n::texts(tracker.lang());
+        let names = projects::active_names(&tracker.conn).unwrap_or_default();
         drop(tracker);
 
         if let Some(view) = &view {
-            update_tray(&app, view, texts);
+            tray::refresh(&app, view, texts, &names);
         }
         if let Some(TickEvent::AutoPaused { since }) = event {
             let since = chrono::DateTime::from_timestamp_millis(since)
@@ -483,15 +488,13 @@ pub fn run() {
             let conn = db::open(&dir.join("tracker.sqlite"))?;
             app.manage(AppState(Mutex::new(Tracker::new(conn)?)));
 
-            let lang = app.state::<AppState>().0.lock().unwrap().lang();
-            let menu = tray_menu(app.handle(), i18n::texts(lang))?;
+            app.manage(tray::TrayState::default());
             let mut tray = TrayIconBuilder::with_id("main")
                 .tooltip("Home Office Tracker")
-                .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => show_main_window(app),
-                    "quit" => app.exit(0),
-                    _ => {}
+                .on_menu_event(|app, event| {
+                    if let Some(action) = tray::parse_action(event.id().as_ref()) {
+                        handle_tray_action(app, action);
+                    }
                 });
             // Windows: levé kliknutí na ikonu otevře okno, menu je na pravém
             // (na macOS zůstává zvyk menu na levé kliknutí).
@@ -511,10 +514,22 @@ pub fn run() {
                         }
                     });
             }
+            // macOS: jednobarevná ikonka-šablona (přizpůsobí se světlé/tmavé
+            // liště); Windows: barevná ikona appky.
+            #[cfg(target_os = "macos")]
+            {
+                tray = tray
+                    .icon(tauri::image::Image::from_bytes(include_bytes!(
+                        "../icons/tray-template.png"
+                    ))?)
+                    .icon_as_template(true);
+            }
+            #[cfg(not(target_os = "macos"))]
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+            refresh_tray_now(app.handle());
 
             app.manage(SyncHandle(Mutex::new(SyncState::default())));
             spawn_ticker(app.handle().clone());

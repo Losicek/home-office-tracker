@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.png" width="128" height="128" alt="Ikona Home Office Tracker"></p>
+
 # Home Office Tracker
 
 [English](README.md) · [Stáhnout](../../releases/latest) · [Pro vývojáře](CONTRIBUTING.md) · [Architektura](docs/ARCHITECTURE.md)
@@ -68,6 +70,9 @@ nejsou, dají se přidat později (viz Roadmap).
   (podepsané klíčem v `~/.tauri/home-office-tracker.key`, heslo je v
   klíčence). Během práce se neaktualizuje. Ve verzi pro Mac App Store je
   vypnutá (feature `app-store`), tam aktualizuje obchod.
+- **Ovládání z lišty:** z menu ikony jde začít práci (i na zvoleném
+  projektu), dát pauzu, pokračovat, ukončit práci a přepnout projekt bez
+  otevírání okna. Nahoře v menu je aktuální stav a čas (`tray.rs`).
 - **Běží v liště.** Zavřením okna se sledování nezastaví. Na macOS je v
   horní liště vidět `▶ 1:23` / `⏸ 1:23`. Na Windows otevře okno levé
   kliknutí na ikonu u hodin, menu je na pravém kliknutí. *Ukončit* v menu

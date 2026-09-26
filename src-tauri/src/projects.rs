@@ -58,6 +58,13 @@ pub fn list(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Project>> {
     .collect()
 }
 
+/// Nearchivované projekty (id, název) — levný dotaz pro menu v liště.
+pub fn active_names(conn: &Connection) -> rusqlite::Result<Vec<(i64, String)>> {
+    conn.prepare("SELECT id, name FROM projects WHERE archived = 0 ORDER BY name COLLATE NOCASE")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect()
+}
+
 pub fn create(conn: &Connection, name: &str, color: &str, now: i64) -> Result<i64, String> {
     let name = clean_name(name)?;
     conn.execute(

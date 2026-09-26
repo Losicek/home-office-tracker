@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.png" width="128" height="128" alt="Home Office Tracker icon"></p>
+
 # Home Office Tracker
 
 **A simple, privacy-friendly working time tracker for people who work from home.**
@@ -52,8 +54,10 @@ Everything stays on the employee's computer: no account, no server, no cloud.
 - **Automatic updates:** the app checks GitHub releases on start and every
   6 hours and offers a one-click update (signed; disabled in the Mac App
   Store build, where the store updates the app).
-- **Lives in the tray / menu bar:** closing the window keeps tracking. On
-  macOS the menu bar shows `▶ 1:23` / `⏸ 1:23`. Only one instance can run.
+- **Control it from the tray / menu bar:** start work (on any project), pause,
+  resume, end or switch project without opening the window. The menu shows
+  the live status and time. Closing the window keeps tracking. On macOS the
+  menu bar shows `▶ 1:23` / `⏸ 1:23`. Only one instance can run.
 
 ## Privacy
 
