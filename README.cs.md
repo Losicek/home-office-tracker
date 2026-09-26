@@ -57,6 +57,11 @@ nejsou, dají se přidat později (viz Roadmap).
 - **O aplikaci** v Nastavení: „Zdarma pro všechny navždy“, logo a odkaz na
   www.losenicky.design (otevírá se v prohlížeči přes tauri-plugin-opener,
   povolena je jen tahle doména).
+- **Automatické aktualizace:** appka po spuštění a pak každých 6 hodin
+  zkontroluje vydání na GitHubu a nabídne aktualizaci jedním kliknutím
+  (podepsané klíčem v `~/.tauri/home-office-tracker.key`, heslo je v
+  klíčence). Během práce se neaktualizuje. Ve verzi pro Mac App Store je
+  vypnutá (feature `app-store`), tam aktualizuje obchod.
 - **Běží v liště.** Zavřením okna se sledování nezastaví. Na macOS je v
   horní liště vidět `▶ 1:23` / `⏸ 1:23`. Na Windows otevře okno levé
   kliknutí na ikonu u hodin, menu je na pravém kliknutí. *Ukončit* v menu

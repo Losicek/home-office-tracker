@@ -193,6 +193,12 @@ fn settings_view(tracker: &Tracker) -> SettingsView {
     }
 }
 
+/// Vestavěné aktualizace (GitHub); ve verzi pro App Store vypnuté.
+#[tauri::command]
+fn updates_enabled() -> bool {
+    cfg!(not(feature = "app-store"))
+}
+
 #[tauri::command]
 fn get_settings(state: tauri::State<AppState>) -> SettingsView {
     settings_view(&state.0.lock().unwrap())
@@ -315,7 +321,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(not(feature = "app-store"))]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let conn = db::open(&dir.join("tracker.sqlite"))?;
@@ -377,6 +387,7 @@ pub fn run() {
             get_report,
             export_report,
             get_settings,
+            updates_enabled,
             save_settings
         ])
         .build(tauri::generate_context!())

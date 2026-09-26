@@ -31,6 +31,8 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 tauri-plugin-opener = "2.5.5"
 sys-locale = "0.3.2"
 uuid = { version = "1.26.1", features = ["v4"] }
+tauri-plugin-updater = "2.12.0"
+tauri-plugin-process = "2.3.1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -48,3 +50,8 @@ objc2-foundation = { version = "0.3.2", features = ["NSString"] }
 
 [target."cfg(windows)".dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_Storage_FileSystem"] }
+
+[features]
+# Verze pro Mac App Store: bez vlastního aktualizátoru (pravidla App Store),
+# aktualizace řeší obchod.
+app-store = []

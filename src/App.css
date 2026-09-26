@@ -730,3 +730,35 @@ select {
   padding: 4px 10px;
   font-size: 13px;
 }
+
+/* Aktualizace */
+.update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--accent-soft);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  font-weight: 500;
+}
+
+.update-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.update-message {
+  flex-basis: 100%;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.update-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

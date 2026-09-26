@@ -38,6 +38,7 @@ import {
   QuickCreateProject,
   useProjects,
 } from "./projects";
+import { UpdateBanner, useUpdater } from "./updater";
 import "./App.css";
 
 type Tab = "today" | "reports" | "projects" | "settings";
@@ -83,6 +84,7 @@ function applyTheme(theme: ThemeSetting) {
 export default function App() {
   const [tab, setTab] = useState<Tab>("today");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const updater = useUpdater();
 
   useEffect(() => {
     api.settings().then(setSettings);
@@ -116,12 +118,15 @@ export default function App() {
             </button>
           ))}
         </nav>
+        {updater.update && <UpdateBanner update={updater.update} />}
         {/* key: po změně jazyka se vše vykreslí znovu s novým formátem dat */}
         <main key={lang}>
           {tab === "today" && <TodayView />}
           {tab === "reports" && <ReportsView />}
           {tab === "projects" && <ProjectsView />}
-          {tab === "settings" && <SettingsView settings={settings} onChange={setSettings} />}
+          {tab === "settings" && (
+            <SettingsView settings={settings} onChange={setSettings} updater={updater} />
+          )}
         </main>
       </div>
     </I18nContext.Provider>
@@ -566,9 +571,11 @@ function Tile({ label, value }: { label: string; value: string }) {
 function SettingsView({
   settings,
   onChange,
+  updater,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
+  updater: ReturnType<typeof useUpdater>;
 }) {
   const t = useT();
   const [draft, setDraft] = useState(settings);
@@ -658,14 +665,14 @@ function SettingsView({
         </div>
       </form>
 
-      <AboutCard />
+      <AboutCard updater={updater} />
     </div>
   );
 }
 
 const AUTHOR_URL = "https://www.losenicky.design";
 
-function AboutCard() {
+function AboutCard({ updater }: { updater: ReturnType<typeof useUpdater> }) {
   const t = useT();
   return (
     <section className="card about">
@@ -677,6 +684,17 @@ function AboutCard() {
       <button className="link" onClick={() => openUrl(AUTHOR_URL)}>
         www.losenicky.design
       </button>
+      {updater.version && <div className="muted">{t.version(updater.version)}</div>}
+      {updater.enabled && (
+        <div className="update-check">
+          <button className="btn small" onClick={updater.checkNow}>
+            {t.checkForUpdates}
+          </button>
+          {updater.checked === "latest" && !updater.update && (
+            <span className="muted">{t.upToDate}</span>
+          )}
+        </div>
+      )}
     </section>
   );
 }

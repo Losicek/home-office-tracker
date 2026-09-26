@@ -45,6 +45,9 @@ Everything stays on the employee's computer: no account, no server, no cloud.
   The default follows the system language and can be changed in Settings.
   Notifications, the tray menu and exports are translated too.
 - **Light & dark mode:** follows the system or can be forced in Settings.
+- **Automatic updates:** the app checks GitHub releases on start and every
+  6 hours and offers a one-click update (signed; disabled in the Mac App
+  Store build, where the store updates the app).
 - **Lives in the tray / menu bar:** closing the window keeps tracking. On
   macOS the menu bar shows `▶ 1:23` / `⏸ 1:23`. Only one instance can run.
 
