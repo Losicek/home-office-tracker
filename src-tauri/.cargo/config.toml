@@ -1,0 +1,3 @@
+# iCloud nesynchronizuje složky s příponou .nosync — výstupy sestavení mají GB.
+[build]
+target-dir = "target.nosync"

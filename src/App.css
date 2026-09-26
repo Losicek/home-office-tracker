@@ -1,0 +1,587 @@
+:root {
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --text: #1c2430;
+  --muted: #6b7686;
+  --border: #e2e7ee;
+  --accent: #1f7a5a;
+  --accent-soft: #e3f3ec;
+  --warn: #b7791f;
+  --warn-soft: #fbf1df;
+  --danger: #c0392b;
+  --idle: #8a94a3;
+  --bar: #3b82c4;
+
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  color-scheme: light dark;
+}
+
+/* Tmavý režim: podle systému, pokud uživatel nevynutil světlý… */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15191f;
+    --card: #1e242c;
+    --text: #e6eaf0;
+    --muted: #97a2b1;
+    --border: #2d3540;
+    --accent: #3fb98a;
+    --accent-soft: #1b3a2f;
+    --warn: #e0a84a;
+    --warn-soft: #3a2f1c;
+    --danger: #e0645a;
+    --idle: #7b8594;
+    --bar: #5aa2e0;
+    color-scheme: dark;
+  }
+}
+
+/* …nebo vynucený tmavý v Nastavení. */
+:root[data-theme="dark"] {
+  --bg: #15191f;
+  --card: #1e242c;
+  --text: #e6eaf0;
+  --muted: #97a2b1;
+  --border: #2d3540;
+  --accent: #3fb98a;
+  --accent-soft: #1b3a2f;
+  --warn: #e0a84a;
+  --warn-soft: #3a2f1c;
+  --danger: #e0645a;
+  --idle: #7b8594;
+  --bar: #5aa2e0;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.app {
+  min-height: 100vh;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 20px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.brand {
+  font-weight: 700;
+  margin-right: 20px;
+}
+
+.tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+main {
+  padding: 20px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.today-header {
+  margin-bottom: 16px;
+}
+
+.date {
+  font-size: 18px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.clock {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-card {
+  text-align: center;
+  padding: 28px 20px;
+  margin-bottom: 16px;
+  border-top: 4px solid var(--idle);
+}
+
+.status-card.working {
+  border-top-color: var(--accent);
+}
+
+.status-card.paused,
+.status-card.auto_paused {
+  border-top-color: var(--warn);
+}
+
+.status-label {
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--idle);
+}
+
+.working .dot {
+  background: var(--accent);
+  animation: pulse 1.6s infinite;
+}
+
+.paused .dot,
+.auto_paused .dot {
+  background: var(--warn);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.stopwatch {
+  font-size: 64px;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0 4px;
+  letter-spacing: -1px;
+}
+
+.current-app {
+  margin-top: 10px;
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.settings .actions {
+  justify-content: flex-start;
+}
+
+.btn {
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  filter: brightness(0.96);
+}
+
+.btn.big {
+  padding: 12px 28px;
+  font-size: 16px;
+  font-weight: 600;
+  min-width: 170px;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.warn {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #fff;
+}
+
+.btn.danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.error {
+  color: var(--danger);
+  margin-top: 12px;
+}
+
+.notice {
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+  word-break: break-all;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 820px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.big-number {
+  font-size: 30px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table tr.empty td {
+  color: var(--muted);
+}
+
+.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bar-col {
+  width: 30%;
+}
+
+.badge {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 13px;
+}
+
+.app-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.app-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.app-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bar > div {
+  height: 100%;
+  background: var(--bar);
+  border-radius: 3px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.segmented {
+  display: inline-flex;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 3px;
+}
+
+.segmented button {
+  font: inherit;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.period-label {
+  min-width: 190px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.export {
+  display: flex;
+  gap: 8px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 820px) {
+  .tiles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.tile-value {
+  font-size: 22px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.settings {
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.settings input {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.settings p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.others summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.others summary::-webkit-details-marker {
+  display: none;
+}
+
+.others summary .app-name::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+
+.others[open] summary .app-name::before {
+  content: "▾ ";
+}
+
+.others-bar > div {
+  background: var(--idle);
+}
+
+.others-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.about {
+  max-width: 560px;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.free-badge {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+
+/* Logo bez pozadí; v tmavém režimu varianta s bílým „DESIGNED BY“. */
+.logo-link {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.logo-link img {
+  display: block;
+  width: 240px;
+  height: auto;
+}
+
+.logo-dark {
+  display: none !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .logo-light {
+    display: none !important;
+  }
+  :root:not([data-theme="light"]) .logo-dark {
+    display: block !important;
+  }
+}
+
+:root[data-theme="dark"] .logo-light {
+  display: none !important;
+}
+
+:root[data-theme="dark"] .logo-dark {
+  display: block !important;
+}
+
+.link {
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--bar);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 560px;
+}
+
+.settings-page .about {
+  margin-top: 0;
+}
+
+.settings select {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.field .segmented {
+  align-self: flex-start;
+}
