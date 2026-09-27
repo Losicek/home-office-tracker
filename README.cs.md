@@ -23,6 +23,17 @@ nejsou, dají se přidat později (viz Roadmap).
   pracovní akce). Přehledy ukazují čas po projektech a jdou filtrovat na jeden
   projekt. Exporty mají sloupec a list „Projekty“. Projekty se nemažou, jen
   archivují.
+- **Ruční úpravy a poznámky:** opravit zapomenutý konec práce, doplnit práci
+  mimo počítač, změnit projekt nebo záznam smazat (`edit.rs`). Ke každé akci
+  jde přidat poznámku. Ruční změny jsou v přehledech i v exportu označené
+  („upraveno ručně“ / „přidáno ručně“) a přes iCloud se propíšou i na ostatní
+  Macy (včetně smazání, `sync_dirty`).
+- **Připomínky:** „Nezapomněl jsi začít?“ (aktivita bez běžící práce, výchozí
+  po 5 min, nejvýš 1× za hodinu) a „Čas na pauzu“ (výchozí po 120 min práce
+  v kuse).
+- **Spuštění po přihlášení** (po automatickém startu jen do lišty) a
+  **globální klávesová zkratka** (výchozí ⌃⌥P / Ctrl+Alt+P): začít / pauza /
+  pokračovat.
 - **Více pracovních akcí za den.** Každé *Začít pracovat → Konec práce* je
   samostatná akce.
 - **Automatická pauza** po N minutách bez pohybu myši nebo klávesnice

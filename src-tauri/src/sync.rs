@@ -78,6 +78,12 @@ struct SessionEntry {
     last_seen: i64,
     /// uuid projektu
     project: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    edited: bool,
+    #[serde(default)]
+    manual: bool,
     segments: Vec<SegmentEntry>,
     apps: Vec<AppEntry>,
 }
@@ -105,12 +111,7 @@ fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(e)
 }
 
-fn month_key(ms: i64) -> String {
-    Utc.timestamp_millis_opt(ms)
-        .single()
-        .map(|d| d.format("%Y-%m").to_string())
-        .unwrap_or_else(|| "1970-01".into())
-}
+use db::month_key;
 
 /// [začátek, začátek dalšího měsíce) v UTC ms.
 fn month_range(key: &str) -> Option<(i64, i64)> {
@@ -187,7 +188,7 @@ pub fn export(conn: &Connection, root: &Path, device_name: &str, now: i64) -> Re
     }
 
     // Měsíce, ve kterých se od posledního exportu něco změnilo.
-    let months: BTreeSet<String> = conn
+    let mut months: BTreeSet<String> = conn
         .prepare(
             "SELECT started_at FROM sessions
              WHERE device_id IS NULL
@@ -199,6 +200,15 @@ pub fn export(conn: &Connection, root: &Path, device_name: &str, now: i64) -> Re
         .map(|r| r.map(month_key))
         .collect::<Result<_, _>>()
         .map_err(e)?;
+
+    let dirty: Vec<String> = conn
+        .prepare("SELECT month FROM sync_dirty")
+        .map_err(e)?
+        .query_map([], |r| r.get(0))
+        .map_err(e)?
+        .collect::<Result<_, _>>()
+        .map_err(e)?;
+    months.extend(dirty);
 
     for month in months {
         let Some((from, to)) = month_range(&month) else {
@@ -215,6 +225,7 @@ pub fn export(conn: &Connection, root: &Path, device_name: &str, now: i64) -> Re
         wrote = true;
     }
 
+    conn.execute("DELETE FROM sync_dirty", []).map_err(e)?;
     db::set_setting(conn, "sync_last_export", &now.to_string()).map_err(e)?;
     Ok(wrote)
 }
@@ -222,7 +233,8 @@ pub fn export(conn: &Connection, root: &Path, device_name: &str, now: i64) -> Re
 fn local_sessions(conn: &Connection, from: i64, to: i64) -> Result<Vec<SessionEntry>, String> {
     let mut sessions: Vec<(i64, SessionEntry)> = conn
         .prepare(
-            "SELECT s.id, s.uuid, s.started_at, s.ended_at, s.last_seen, p.uuid
+            "SELECT s.id, s.uuid, s.started_at, s.ended_at, s.last_seen, p.uuid,
+                    s.note, s.edited, s.manual
              FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
              WHERE s.device_id IS NULL AND s.started_at >= ?1 AND s.started_at < ?2
              ORDER BY s.started_at",
@@ -237,6 +249,9 @@ fn local_sessions(conn: &Connection, from: i64, to: i64) -> Result<Vec<SessionEn
                     ended_at: r.get(3)?,
                     last_seen: r.get(4)?,
                     project: r.get(5)?,
+                    note: r.get(6)?,
+                    edited: r.get::<_, i64>(7)? != 0,
+                    manual: r.get::<_, i64>(8)? != 0,
                     segments: Vec::new(),
                     apps: Vec::new(),
                 },
@@ -358,10 +373,13 @@ pub fn import(conn: &Connection, root: &Path) -> Result<bool, String> {
                 serde_json::from_slice::<ProjectsFile>(&bytes)
                     .ok()
                     .map(|f| apply_projects(conn, &f.projects))
-            } else if name.starts_with("sessions-") {
+            } else if let Some(month) = name
+                .strip_prefix("sessions-")
+                .and_then(|n| n.strip_suffix(".json"))
+            {
                 serde_json::from_slice::<SessionsFile>(&bytes)
                     .ok()
-                    .map(|f| apply_sessions(conn, &device, &f.sessions))
+                    .map(|f| apply_sessions(conn, &device, month, &f.sessions))
             } else {
                 None
             };
@@ -434,9 +452,36 @@ fn apply_projects(conn: &Connection, projects: &[ProjectEntry]) -> Result<(), St
 fn apply_sessions(
     conn: &Connection,
     device: &str,
+    month: &str,
     sessions: &[SessionEntry],
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(e)?;
+    // Akce, které v souboru daného měsíce už nejsou, byly na druhém počítači
+    // smazány (nebo přesunuty do jiného měsíce) → pryč.
+    if let Some((from, to)) = month_range(month) {
+        let keep: std::collections::HashSet<&str> =
+            sessions.iter().map(|s| s.uuid.as_str()).collect();
+        let existing: Vec<(i64, String)> = tx
+            .prepare(
+                "SELECT id, uuid FROM sessions
+                 WHERE device_id = ?1 AND started_at >= ?2 AND started_at < ?3",
+            )
+            .map_err(e)?
+            .query_map(params![device, from, to], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(e)?
+            .collect::<Result<_, _>>()
+            .map_err(e)?;
+        for (id, uuid) in existing {
+            if !keep.contains(uuid.as_str()) {
+                tx.execute("DELETE FROM app_usage WHERE session_id = ?1", [id])
+                    .map_err(e)?;
+                tx.execute("DELETE FROM segments WHERE session_id = ?1", [id])
+                    .map_err(e)?;
+                tx.execute("DELETE FROM sessions WHERE id = ?1", [id])
+                    .map_err(e)?;
+            }
+        }
+    }
     for s in sessions {
         let existing: Option<(i64, Option<String>)> = tx
             .query_row(
@@ -471,9 +516,20 @@ fn apply_sessions(
         // Akce, která na druhém počítači ještě běží, končí (zatím) v last_seen.
         let end = s.ended_at.unwrap_or(s.last_seen);
         tx.execute(
-            "INSERT INTO sessions (started_at, ended_at, last_seen, project_id, uuid, device_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![s.started_at, end, s.last_seen, project, s.uuid, device],
+            "INSERT INTO sessions (started_at, ended_at, last_seen, project_id, uuid, device_id,
+                                   note, edited, manual)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                s.started_at,
+                end,
+                s.last_seen,
+                project,
+                s.uuid,
+                device,
+                s.note,
+                s.edited as i64,
+                s.manual as i64
+            ],
         )
         .map_err(e)?;
         let id = tx.last_insert_rowid();
@@ -574,6 +630,65 @@ mod tests {
         import(&a.conn, &root).unwrap();
         assert_eq!(projects::list(&a.conn, 0).unwrap()[0].name, "Klient s.r.o.");
 
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn edits_and_deletions_propagate() {
+        let root = temp_root();
+        let t0 = Utc
+            .with_ymd_and_hms(2026, 9, 25, 8, 0, 0)
+            .unwrap()
+            .timestamp_millis();
+        let now = t0 + 10 * 60 * MIN;
+        let mut a = Tracker::new(db::open_in_memory().unwrap()).unwrap();
+        let b = Tracker::new(db::open_in_memory().unwrap()).unwrap();
+        a.start(t0, None, None).unwrap();
+        a.end(t0 + 60 * MIN).unwrap();
+        a.start(t0 + 2 * 60 * MIN, None, None).unwrap();
+        a.end(t0 + 3 * 60 * MIN).unwrap();
+        export(&a.conn, &root, "Mac Studio", t0 + 181 * MIN).unwrap();
+        import(&b.conn, &root).unwrap();
+        let count = |t: &Tracker| -> i64 {
+            t.conn
+                .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count(&b), 2);
+
+        // Na A: poznámka k první, druhá smazána. Export pošle měsíc znovu.
+        let ids: Vec<i64> = a
+            .conn
+            .prepare("SELECT id FROM sessions ORDER BY started_at")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        crate::edit::update_session(
+            &a.conn,
+            ids[0],
+            None,
+            crate::edit::SessionInput {
+                started_at: t0,
+                ended_at: t0 + 60 * MIN,
+                project: None,
+                note: Some("Porada".into()),
+            },
+            now,
+        )
+        .unwrap();
+        crate::edit::delete_session(&a.conn, ids[1], None).unwrap();
+        // Posun mtime, aby import soubor poznal jako změněný i ve stejné ms.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(export(&a.conn, &root, "Mac Studio", now).unwrap());
+        assert!(import(&b.conn, &root).unwrap());
+        assert_eq!(count(&b), 1);
+        let note: Option<String> = b
+            .conn
+            .query_row("SELECT note FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(note.as_deref(), Some("Porada"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

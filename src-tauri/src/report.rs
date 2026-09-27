@@ -32,6 +32,11 @@ pub struct SessionRow {
     pub project_color: Option<String>,
     /// Počítač, na kterém akce proběhla (jen u akcí z jiných počítačů).
     pub device_name: Option<String>,
+    pub note: Option<String>,
+    /// Časy upravené ručně.
+    pub edited: bool,
+    /// Celá akce přidaná ručně.
+    pub manual: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,7 +217,8 @@ pub fn build(
 
     let mut sessions: Vec<SessionRow> = conn
         .prepare(&format!(
-            "SELECT s.id, s.started_at, s.ended_at, s.project_id, p.name, p.color, d.name
+            "SELECT s.id, s.started_at, s.ended_at, s.project_id, p.name, p.color, d.name,
+                    s.note, s.edited, s.manual
              FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
              LEFT JOIN devices d ON d.id = s.device_id
              WHERE s.started_at < ?2 AND COALESCE(s.ended_at, ?3) > ?1 AND {cond}
@@ -230,6 +236,9 @@ pub fn build(
                 project_name: r.get(4)?,
                 project_color: r.get(5)?,
                 device_name: r.get(6)?,
+                note: r.get(7)?,
+                edited: r.get::<_, i64>(8)? != 0,
+                manual: r.get::<_, i64>(9)? != 0,
             })
         })?
         .collect::<Result<_, _>>()?;

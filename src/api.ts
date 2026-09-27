@@ -12,6 +12,8 @@ export interface StatusView {
   currentApp: string | null;
   /** Projekt běžící akce; mimo práci naposledy použitý (předvýběr). */
   project: ProjectRef | null;
+  /** Poznámka k běžící akci. */
+  note: string | null;
 }
 
 export interface ProjectRef {
@@ -61,6 +63,18 @@ export interface SessionRow {
   projectColor: string | null;
   /** Jen u akcí z jiného počítače (synchronizace). */
   deviceName: string | null;
+  note: string | null;
+  /** Časy upravené ručně. */
+  edited: boolean;
+  /** Celá akce přidaná ručně. */
+  manual: boolean;
+}
+
+export interface SessionInput {
+  startedAt: number;
+  endedAt: number;
+  project: number | null;
+  note: string | null;
 }
 
 export interface SyncStatus {
@@ -105,6 +119,12 @@ export interface Settings {
   language: string;
   theme: ThemeSetting;
   icloudSync: boolean;
+  remindStart: boolean;
+  remindStartMinutes: number;
+  /** 0 = vypnuto */
+  breakReminderMinutes: number;
+  /** "" = vypnuto */
+  shortcut: string;
   /** Jen pro čtení — jazyk, který se opravdu použije. */
   resolvedLanguage?: string;
 }
@@ -134,5 +154,10 @@ export const api = {
   settings: () => invoke<Settings>("get_settings"),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   syncNow: () => invoke<void>("sync_now"),
+  updateSession: (id: number, input: SessionInput) =>
+    invoke<void>("update_session", { id, input }),
+  addSession: (input: SessionInput) => invoke<number>("add_session", { input }),
+  deleteSession: (id: number) => invoke<void>("delete_session", { id }),
+  autostartSupported: () => invoke<boolean>("autostart_supported"),
   saveSettings: (settings: Settings) => invoke<Settings>("save_settings", { settings }),
 };

@@ -8,11 +8,12 @@
 //! - `devices`   — ostatní počítače ze synchronizace (iCloud); akce odjinud
 //!                 mají `sessions.device_id`, akce z tohoto počítače NULL
 //! - `sync_files`— které synchronizační soubory už jsou načtené (mtime, size)
+//! - `sync_dirty`— měsíce, které se po ruční úpravě musí znovu exportovat
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -97,6 +98,16 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              );",
         )?;
     }
+    if version < 4 {
+        // Poznámka k akci, ruční úpravy (v exportu označené) a měsíce, které
+        // je kvůli úpravě/smazání potřeba znovu poslat do synchronizace.
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN note TEXT;
+             ALTER TABLE sessions ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE sessions ADD COLUMN manual INTEGER NOT NULL DEFAULT 0;
+             CREATE TABLE sync_dirty (month TEXT PRIMARY KEY);",
+        )?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -159,4 +170,23 @@ pub fn device_id(conn: &Connection) -> rusqlite::Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     set_setting(conn, "device_id", &id)?;
     Ok(id)
+}
+
+/// Měsíc (UTC, „2026-09“), do kterého synchronizace řadí akci podle začátku.
+pub fn month_key(ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Utc
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|d| d.format("%Y-%m").to_string())
+        .unwrap_or_else(|| "1970-01".into())
+}
+
+/// Po ruční úpravě/smazání: měsíc se při příští synchronizaci pošle znovu.
+pub fn mark_dirty(conn: &Connection, started_at: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_dirty (month) VALUES (?1)",
+        [month_key(started_at)],
+    )?;
+    Ok(())
 }

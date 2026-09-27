@@ -24,6 +24,14 @@ Everything stays on the employee's computer: no account, no server, no cloud.
 - **Projects:** create your own projects (name + color), pick one before you
   start, and switch it during work. Reports show time per project and can be
   filtered to one project. Archived projects stay in reports.
+- **Manual corrections & notes:** fix a forgotten *End work*, add work done
+  away from the computer, change the project or delete an entry. Add a note
+  ("what I worked on") to any session. Manual changes are marked in reports
+  and exports.
+- **Reminders:** "Forgot to start?" when you're active but not tracking, and
+  "Time for a break" after a set time of continuous work.
+- **Launch at login** and a **global keyboard shortcut** (e.g. ⌃⌥P) to start,
+  pause and resume from anywhere.
 - **Time per application:** the app in the foreground is recorded while you
   work. The UI shows the top 5 apps and an expandable *Other* row.
 - **Automatic break after inactivity:** after N minutes without mouse or
@@ -78,12 +86,11 @@ Installers are attached to each [GitHub release](../../releases/latest):
 
 | Platform | File |
 |---|---|
-| macOS 11+ (Apple Silicon & Intel) | `Home Office Tracker_x.y.z_universal.dmg` |
-| Windows 10 / 11 (x64) | `Home Office Tracker_x.y.z_x64-setup.exe` or `.msi` |
+| macOS 11+ (Apple Silicon & Intel) | [HomeOfficeTracker-mac.dmg](../../releases/latest/download/HomeOfficeTracker-mac.dmg) |
+| Windows 10 / 11 (x64) | [HomeOfficeTracker-windows-setup.exe](../../releases/latest/download/HomeOfficeTracker-windows-setup.exe) or [.msi](../../releases/latest/download/HomeOfficeTracker-windows.msi) |
 
-The Windows installer is not code-signed yet. SmartScreen may warn you: click
-*More info → Run anyway*. If a macOS build is not notarized, right-click the
-app → *Open* the first time.
+The macOS app is signed and notarized by Apple. The Windows installer is not
+code-signed yet; SmartScreen may warn you: click *More info → Run anyway*.
 
 ## Building from source
 

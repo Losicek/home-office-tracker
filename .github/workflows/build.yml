@@ -73,6 +73,39 @@ jobs:
           releaseName: Home Office Tracker ${{ github.ref_name }}
           releaseBody: See the assets below to download and install.
           releaseDraft: true
+      # tauri-action notarizuje jen .app; notarizujeme i .dmg, aby macOS
+      # neupozorňoval ani při otevření obrazu disku.
+      - name: Notarize DMG + stable download names (macOS)
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG=$(ls src-tauri/target.nosync/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
+          # GitHub nahrazuje mezery v názvu tečkami — stejné jméno = přepsání.
+          NAME=$(basename "$DMG" | tr ' ' '.')
+          cp "$DMG" "$RUNNER_TEMP/$NAME"
+          cp "$DMG" "$RUNNER_TEMP/HomeOfficeTracker-mac.dmg"
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/$NAME" \
+            "$RUNNER_TEMP/HomeOfficeTracker-mac.dmg" --clobber
+      # Trvalé odkazy: …/releases/latest/download/HomeOfficeTracker-windows-setup.exe
+      - name: Stable download names (Windows)
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXE=$(ls src-tauri/target.nosync/release/bundle/nsis/*.exe)
+          MSI=$(ls src-tauri/target.nosync/release/bundle/msi/*.msi)
+          cp "$EXE" HomeOfficeTracker-windows-setup.exe
+          cp "$MSI" HomeOfficeTracker-windows.msi
+          gh release upload "$GITHUB_REF_NAME" HomeOfficeTracker-windows-setup.exe \
+            HomeOfficeTracker-windows.msi --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}

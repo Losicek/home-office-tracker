@@ -33,7 +33,36 @@ pub struct Settings {
     /// Synchronizace přes iCloud (jen macOS s podepsanou appkou).
     #[serde(default)]
     pub icloud_sync: bool,
+    /// Připomínka „nezapomněl jsi začít?“ při aktivitě bez běžící práce.
+    #[serde(default = "default_true")]
+    pub remind_start: bool,
+    #[serde(default = "default_remind_start_minutes")]
+    pub remind_start_minutes: u32,
+    /// Připomínka pauzy po tolika minutách práce v kuse (0 = vypnuto).
+    #[serde(default = "default_break_minutes")]
+    pub break_reminder_minutes: u32,
+    /// Globální zkratka pro začít/pauza/pokračovat, "" = vypnuto.
+    #[serde(default = "default_shortcut")]
+    pub shortcut: String,
 }
+
+fn default_true() -> bool {
+    true
+}
+fn default_remind_start_minutes() -> u32 {
+    5
+}
+fn default_break_minutes() -> u32 {
+    120
+}
+pub fn default_shortcut() -> String {
+    "Ctrl+Alt+P".into()
+}
+
+/// Jak dlouho po připomínce začátku práce se znovu nepřipomíná.
+const START_REMINDER_COOLDOWN_MS: i64 = 60 * 60_000;
+/// Nečinnost kratší než tohle se při připomínce začátku bere jako „pracuje“.
+const ACTIVE_IDLE_SECS: u64 = 60;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -43,6 +72,10 @@ impl Default for Settings {
             language: "system".into(),
             theme: "system".into(),
             icloud_sync: false,
+            remind_start: true,
+            remind_start_minutes: default_remind_start_minutes(),
+            break_reminder_minutes: default_break_minutes(),
+            shortcut: default_shortcut(),
         }
     }
 }
@@ -61,12 +94,18 @@ pub struct StatusView {
     /// Projekt běžící akce; když se nepracuje, naposledy použitý projekt
     /// (předvybraný pro další start).
     pub project: Option<projects::ProjectRef>,
+    /// Poznámka k běžící akci.
+    pub note: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum TickEvent {
     /// Automatická pauza kvůli nečinnosti / uspání, pauza začíná v `since`.
     AutoPaused { since: i64 },
+    /// Uživatel už chvíli pracuje na počítači, ale měření neběží.
+    RemindStart,
+    /// Práce v kuse bez pauzy už trvá `minutes` minut.
+    RemindBreak { minutes: u32 },
 }
 
 pub struct Tracker {
@@ -80,6 +119,11 @@ pub struct Tracker {
     app: Option<(i64, String)>,
     last_tick: i64,
     last_heartbeat: i64,
+    /// Od kdy je uživatel aktivní, zatímco měření neběží.
+    active_since: Option<i64>,
+    start_reminded_at: Option<i64>,
+    /// Začátek úseku práce, pro který už padla připomínka pauzy.
+    break_reminded_for: Option<i64>,
 }
 
 impl Tracker {
@@ -101,6 +145,18 @@ impl Tracker {
         if let Some(v) = db::get_setting(&conn, "icloud_sync")? {
             settings.icloud_sync = v == "1";
         }
+        if let Some(v) = db::get_setting(&conn, "remind_start")? {
+            settings.remind_start = v == "1";
+        }
+        if let Some(v) = db::get_setting(&conn, "remind_start_minutes")? {
+            settings.remind_start_minutes = v.parse().unwrap_or(settings.remind_start_minutes);
+        }
+        if let Some(v) = db::get_setting(&conn, "break_reminder_minutes")? {
+            settings.break_reminder_minutes = v.parse().unwrap_or(settings.break_reminder_minutes);
+        }
+        if let Some(v) = db::get_setting(&conn, "shortcut")? {
+            settings.shortcut = v;
+        }
         Ok(Tracker {
             conn,
             settings,
@@ -112,12 +168,25 @@ impl Tracker {
             app: None,
             last_tick: 0,
             last_heartbeat: 0,
+            active_since: None,
+            start_reminded_at: None,
+            break_reminded_for: None,
         })
     }
 
     #[cfg(test)]
     pub fn status(&self) -> Status {
         self.status
+    }
+
+    /// Aktuální stav (pro globální zkratku).
+    pub fn status_now(&self) -> Status {
+        self.status
+    }
+
+    /// Id právě běžící akce (ta se ručně upravovat nesmí).
+    pub fn current_session(&self) -> Option<i64> {
+        self.session_id
     }
 
     /// Skutečně používaný jazyk (při „system“ podle systému).
@@ -143,6 +212,10 @@ impl Tracker {
                 "system".into()
             },
             icloud_sync: settings.icloud_sync,
+            remind_start: settings.remind_start,
+            remind_start_minutes: settings.remind_start_minutes.clamp(1, 120),
+            break_reminder_minutes: settings.break_reminder_minutes.min(600),
+            shortcut: settings.shortcut.trim().to_string(),
         };
         db::set_setting(
             &self.conn,
@@ -157,6 +230,22 @@ impl Tracker {
             "icloud_sync",
             if settings.icloud_sync { "1" } else { "0" },
         )?;
+        db::set_setting(
+            &self.conn,
+            "remind_start",
+            if settings.remind_start { "1" } else { "0" },
+        )?;
+        db::set_setting(
+            &self.conn,
+            "remind_start_minutes",
+            &settings.remind_start_minutes.to_string(),
+        )?;
+        db::set_setting(
+            &self.conn,
+            "break_reminder_minutes",
+            &settings.break_reminder_minutes.to_string(),
+        )?;
+        db::set_setting(&self.conn, "shortcut", &settings.shortcut)?;
         self.settings = settings;
         Ok(())
     }
@@ -255,8 +344,9 @@ impl Tracker {
         app: Option<String>,
     ) -> rusqlite::Result<Option<TickEvent>> {
         let Some(session) = self.session_id else {
-            return Ok(None);
+            return Ok(self.check_start_reminder(now, idle_secs));
         };
+        self.active_since = None;
         let previous_tick = self.last_tick;
         self.last_tick = now;
 
@@ -284,6 +374,8 @@ impl Tracker {
             return self.auto_pause(since).map(Some);
         }
 
+        let reminder = self.check_break_reminder(now);
+
         let changed = match (&self.app, &app) {
             (Some((_, current)), Some(new)) => current != new,
             (None, None) => false,
@@ -292,7 +384,7 @@ impl Tracker {
         if changed {
             self.switch_app(app, now)?;
         }
-        Ok(None)
+        Ok(reminder)
     }
 
     pub fn view(&self, now: i64) -> rusqlite::Result<StatusView> {
@@ -319,6 +411,15 @@ impl Tracker {
             Some(id) => projects::get_ref(&self.conn, id)?,
             None => None,
         };
+        let note = match self.session_id {
+            Some(id) => {
+                self.conn
+                    .query_row("SELECT note FROM sessions WHERE id = ?1", [id], |r| {
+                        r.get(0)
+                    })?
+            }
+            None => None,
+        };
         Ok(StatusView {
             status: self.status,
             now,
@@ -331,7 +432,38 @@ impl Tracker {
                 _ => None,
             },
             project,
+            note,
         })
+    }
+
+    fn check_start_reminder(&mut self, now: i64, idle_secs: u64) -> Option<TickEvent> {
+        if !self.settings.remind_start || idle_secs >= ACTIVE_IDLE_SECS {
+            self.active_since = None;
+            return None;
+        }
+        let since = *self.active_since.get_or_insert(now);
+        let due = now - since >= self.settings.remind_start_minutes as i64 * 60_000;
+        let cooled_down = self
+            .start_reminded_at
+            .is_none_or(|at| now - at >= START_REMINDER_COOLDOWN_MS);
+        if due && cooled_down {
+            self.start_reminded_at = Some(now);
+            return Some(TickEvent::RemindStart);
+        }
+        None
+    }
+
+    fn check_break_reminder(&mut self, now: i64) -> Option<TickEvent> {
+        let minutes = self.settings.break_reminder_minutes;
+        let segment = self.segment_started_at?;
+        if minutes == 0 || self.break_reminded_for == Some(segment) {
+            return None;
+        }
+        if now - segment >= minutes as i64 * 60_000 {
+            self.break_reminded_for = Some(segment);
+            return Some(TickEvent::RemindBreak { minutes });
+        }
+        None
     }
 
     fn auto_pause(&mut self, since: i64) -> rusqlite::Result<TickEvent> {
@@ -485,6 +617,37 @@ mod tests {
         assert_eq!(per_project, vec![(Some(a), 30 * MIN), (Some(b), 15 * MIN)]);
         // Po konci práce je předvybraný naposledy použitý projekt.
         assert_eq!(t.view(50 * MIN).unwrap().project.map(|p| p.id), Some(b));
+    }
+
+    #[test]
+    fn reminds_to_start_after_activity_without_tracking() {
+        let mut t = tracker();
+        let mut events = Vec::new();
+        for i in 0..(10 * 60) {
+            // Uživatel je aktivní (nečinnost 2 s), ale nepracuje se.
+            if let Some(ev) = t.tick(i * 1000, 2, app("Mail")).unwrap() {
+                events.push((i, ev));
+            }
+        }
+        // Jen jednou, po 5 minutách aktivity.
+        assert_eq!(events, vec![(300, TickEvent::RemindStart)]);
+    }
+
+    #[test]
+    fn reminds_break_once_per_work_segment() {
+        let mut t = tracker();
+        t.settings.break_reminder_minutes = 90;
+        t.start(0, app("Excel"), None).unwrap();
+        let mut events = Vec::new();
+        for i in 1..=(100 * 60) {
+            if let Some(ev) = t.tick(i * 1000, 0, app("Excel")).unwrap() {
+                events.push((i, ev));
+            }
+        }
+        assert_eq!(
+            events,
+            vec![(90 * 60, TickEvent::RemindBreak { minutes: 90 })]
+        );
     }
 
     #[test]

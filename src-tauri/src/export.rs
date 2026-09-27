@@ -51,6 +51,17 @@ fn csv_field(s: &str) -> String {
     }
 }
 
+/// „upraveno ručně“ / „přidáno ručně“ / nic.
+fn modification<'a>(s: &crate::report::SessionRow, t: &'a Texts) -> &'a str {
+    if s.manual {
+        t.manual
+    } else if s.edited {
+        t.edited
+    } else {
+        ""
+    }
+}
+
 fn project_name<'a>(name: &'a Option<String>, t: &'a Texts) -> &'a str {
     name.as_deref().unwrap_or(t.no_project)
 }
@@ -59,8 +70,10 @@ pub fn to_csv(report: &Report, employee: &str, t: &Texts) -> String {
     let sep = if t.decimal_comma { ";" } else { "," };
     let mut out = String::from("\u{FEFF}");
     out.push_str(&t.csv_headers.map(csv_field).join(sep));
-    out.push_str(sep);
-    out.push_str(&csv_field(t.project));
+    for h in [t.project, t.note, t.modified] {
+        out.push_str(sep);
+        out.push_str(&csv_field(h));
+    }
     out.push('\n');
     for s in &report.sessions {
         let row = [
@@ -75,6 +88,8 @@ pub fn to_csv(report: &Report, employee: &str, t: &Texts) -> String {
             hmm(s.paused_ms),
             s.auto_pauses.to_string(),
             csv_field(project_name(&s.project_name, t)),
+            csv_field(s.note.as_deref().unwrap_or("")),
+            csv_field(modification(s, t)),
         ];
         out.push_str(&row.join(sep));
         out.push('\n');
@@ -149,11 +164,18 @@ pub fn to_xlsx(
 
     // Pracovní akce
     let ws = wb.add_worksheet().set_name(t.sheets[2])?;
-    for (col, title) in t.session_headers.iter().chain([&t.project]).enumerate() {
+    for (col, title) in t
+        .session_headers
+        .iter()
+        .chain([&t.project, &t.note, &t.modified])
+        .enumerate()
+    {
         ws.write_string_with_format(0, col as u16, *title, &header)?;
         ws.set_column_width(col as u16, 16)?;
     }
     ws.set_column_width(6, 28)?;
+    ws.set_column_width(7, 40)?;
+    ws.set_column_width(8, 18)?;
     for (i, s) in report.sessions.iter().enumerate() {
         let row = i as u32 + 1;
         ws.write_datetime_with_format(row, 0, &excel_date(local_date(s.started_at))?, &date_fmt)?;
@@ -169,6 +191,10 @@ pub fn to_xlsx(
         ws.write_number_with_format(row, 4, s.paused_ms as f64 / MS_PER_DAY, &duration)?;
         ws.write_number(row, 5, s.auto_pauses as f64)?;
         ws.write_string(row, 6, project_name(&s.project_name, t))?;
+        if let Some(note) = &s.note {
+            ws.write_string(row, 7, note)?;
+        }
+        ws.write_string(row, 8, modification(s, t))?;
     }
 
     // Projekty

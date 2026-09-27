@@ -153,8 +153,12 @@ Build with `--features app-store` to disable the updater (Mac App Store).
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml` and
    `src-tauri/tauri.conf.json` (keep them equal).
 2. Commit, then `git tag vX.Y.Z && git push --tags`.
-3. CI builds, signs and notarizes the installers and update bundles and
-   attaches them (plus `latest.json`) to a draft GitHub release.
+3. CI builds, signs and notarizes the installers (app **and** `.dmg`) and
+   update bundles and attaches them (plus `latest.json`) to a draft GitHub
+   release, together with copies under stable names for permanent download
+   links: `HomeOfficeTracker-mac.dmg`, `HomeOfficeTracker-windows-setup.exe`,
+   `HomeOfficeTracker-windows.msi`
+   (`https://github.com/Losicek/home-office-tracker/releases/latest/download/<name>`).
 4. Write release notes and publish. Installed apps are offered the update
    within 6 hours.
 

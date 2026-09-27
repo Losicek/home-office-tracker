@@ -38,6 +38,8 @@ import {
   QuickCreateProject,
   useProjects,
 } from "./projects";
+import { AutomationCard } from "./automation";
+import { EditSessionDialog } from "./edit";
 import { SyncCard } from "./sync";
 import { UpdateBanner, useUpdater } from "./updater";
 import "./App.css";
@@ -143,6 +145,7 @@ function TodayView() {
   const [projects, refreshProjects] = useProjects();
   // undefined = předvybraný naposledy použitý projekt z jádra
   const [picked, setPicked] = useState<number | null | undefined>(undefined);
+  const [editing, setEditing] = useState<{ session?: SessionRow } | null>(null);
 
   const refresh = useCallback(() => {
     api.status().then(setStatus).catch((e) => setError(String(e)));
@@ -176,6 +179,7 @@ function TodayView() {
   const todayWorked = (today?.report.workedMs ?? 0) + (working && today ? now - today.fetchedAt : 0);
   const state = status?.status ?? "off";
   const selectedProject = picked !== undefined ? picked : (status?.project?.id ?? null);
+  const runningSession = today?.report.sessions.find((s) => !s.endedAt && !s.deviceName);
   const statusLabel = {
     off: t.statusOff,
     working: t.statusWorking,
@@ -232,6 +236,9 @@ function TodayView() {
             />
           )}
         </div>
+        {state !== "off" && runningSession && (
+          <NoteField key={runningSession.id} session={runningSession} initial={status?.note ?? ""} />
+        )}
 
         <div className="actions">
           {state === "off" && (
@@ -266,20 +273,75 @@ function TodayView() {
 
       <div className="grid-2">
         <section className="card">
-          <h2>{t.todayTotal}</h2>
+          <div className="card-head">
+            <h2>{t.todayTotal}</h2>
+            <button className="btn small" onClick={() => setEditing({})}>
+              {t.addEntry}
+            </button>
+          </div>
           <div className="big-number">{duration(todayWorked)}</div>
-          <SessionList sessions={today?.report.sessions ?? []} />
+          <SessionList
+            sessions={today?.report.sessions ?? []}
+            onEdit={(session) => setEditing({ session })}
+          />
         </section>
         <section className="card">
           <h2>{t.topAppsToday}</h2>
           <AppList apps={today?.report.apps ?? []} />
         </section>
       </div>
+      {editing && (
+        <EditSessionDialog
+          session={editing.session}
+          running={!!editing.session && !editing.session.endedAt}
+          projects={projects}
+          onClose={() => {
+            setEditing(null);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function SessionList({ sessions }: { sessions: SessionRow[] }) {
+/** Poznámka k běžící akci — uloží se po opuštění pole nebo Enteru. */
+function NoteField({ session, initial }: { session: SessionRow; initial: string }) {
+  const t = useT();
+  const [note, setNote] = useState(initial);
+  const [saved, setSaved] = useState(initial);
+  const save = () => {
+    if (note === saved) return;
+    api
+      .updateSession(session.id, {
+        startedAt: session.startedAt,
+        endedAt: session.startedAt,
+        project: session.projectId,
+        note: note.trim() || null,
+      })
+      .then(() => setSaved(note));
+  };
+  return (
+    <input
+      className="note-field"
+      value={note}
+      placeholder={t.notePlaceholder}
+      maxLength={500}
+      onChange={(e) => setNote(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+    />
+  );
+}
+
+function SessionList({
+  sessions,
+  onEdit,
+}: {
+  sessions: SessionRow[];
+  /** Klik na řádek = úprava (jen akce z tohoto počítače). */
+  onEdit?: (s: SessionRow) => void;
+}) {
   const t = useT();
   if (sessions.length === 0) return <p className="muted">{t.noSessions}</p>;
   return (
@@ -295,7 +357,11 @@ function SessionList({ sessions }: { sessions: SessionRow[] }) {
       </thead>
       <tbody>
         {sessions.map((s) => (
-          <tr key={s.id}>
+          <tr
+            key={s.id}
+            className={onEdit && !s.deviceName ? "clickable" : undefined}
+            onClick={onEdit && !s.deviceName ? () => onEdit(s) : undefined}
+          >
             <td>{clock(s.startedAt)}</td>
             <td>{s.endedAt ? clock(s.endedAt) : <span className="badge">{t.inProgress}</span>}</td>
             <td className="project-cell">
@@ -304,6 +370,13 @@ function SessionList({ sessions }: { sessions: SessionRow[] }) {
               {s.deviceName && (
                 <span className="device-badge" title={s.deviceName}>
                   💻 {s.deviceName}
+                </span>
+              )}
+              {s.manual && <span className="tag">{t.badgeManual}</span>}
+              {!s.manual && s.edited && <span className="tag">{t.badgeEdited}</span>}
+              {s.note && (
+                <span className="note-inline" title={s.note}>
+                  {s.note}
                 </span>
               )}
             </td>
@@ -386,6 +459,7 @@ function ReportsView() {
   const [message, setMessage] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectFilter>("all");
   const [projects] = useProjects();
+  const [editing, setEditing] = useState<{ session?: SessionRow; day?: Date } | null>(null);
 
   const { from, to } = periodRange(period, anchor);
   const fromIso = toIso(from);
@@ -493,12 +567,25 @@ function ReportsView() {
         <section className="card">
           {period === "day" ? (
             <>
-              <h2>{t.sessionsTitle}</h2>
-              <SessionList sessions={report?.sessions ?? []} />
+              <div className="card-head">
+                <h2>{t.sessionsTitle}</h2>
+                <button className="btn small" onClick={() => setEditing({ day: from })}>
+                  {t.addEntry}
+                </button>
+              </div>
+              <SessionList
+                sessions={report?.sessions ?? []}
+                onEdit={(session) => setEditing({ session })}
+              />
             </>
           ) : (
             <>
-              <h2>{t.byDay}</h2>
+              <div className="card-head">
+                <h2>{t.byDay}</h2>
+                <button className="btn small" onClick={() => setEditing({ day: new Date() })}>
+                  {t.addEntry}
+                </button>
+              </div>
               <table className="table">
                 <thead>
                   <tr>
@@ -535,6 +622,18 @@ function ReportsView() {
           <AppList apps={report?.apps ?? []} />
         </section>
       </div>
+      {editing && (
+        <EditSessionDialog
+          session={editing.session}
+          day={editing.day}
+          running={!!editing.session && !editing.session.endedAt}
+          projects={projects}
+          onClose={() => {
+            setEditing(null);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -640,6 +739,8 @@ function SettingsView({
           </div>
         </div>
       </section>
+
+      <AutomationCard settings={settings} onChange={saveNow} />
 
       <SyncCard
         settings={settings}

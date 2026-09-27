@@ -1,4 +1,5 @@
 mod db;
+mod edit;
 mod export;
 mod i18n;
 pub mod platform;
@@ -99,6 +100,60 @@ fn start_work(app: AppHandle, project: Option<i64>) -> CmdResult<StatusView> {
 #[tauri::command]
 fn switch_project(app: AppHandle, project: Option<i64>) -> CmdResult<StatusView> {
     with_tracker(&app, |t, now| t.switch_project(now, None, project))
+}
+
+/// Po ruční úpravě: obnovit lištu, okno a poslat změnu do synchronizace.
+fn after_edit(app: &AppHandle) {
+    refresh_tray_now(app);
+    let _ = app.emit("tracker-changed", ());
+    let app = app.clone();
+    std::thread::spawn(move || run_sync(&app));
+}
+
+#[tauri::command]
+fn update_session(app: AppHandle, id: i64, input: edit::SessionInput) -> CmdResult<()> {
+    {
+        let state = app.state::<AppState>();
+        let tracker = state.0.lock().unwrap();
+        edit::update_session(
+            &tracker.conn,
+            id,
+            tracker.current_session(),
+            input,
+            now_ms(),
+        )?;
+    }
+    after_edit(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn add_session(app: AppHandle, input: edit::SessionInput) -> CmdResult<i64> {
+    let id = {
+        let state = app.state::<AppState>();
+        let tracker = state.0.lock().unwrap();
+        edit::add_session(&tracker.conn, input, now_ms())?
+    };
+    after_edit(&app);
+    Ok(id)
+}
+
+#[tauri::command]
+fn delete_session(app: AppHandle, id: i64) -> CmdResult<()> {
+    {
+        let state = app.state::<AppState>();
+        let tracker = state.0.lock().unwrap();
+        edit::delete_session(&tracker.conn, id, tracker.current_session())?;
+    }
+    after_edit(&app);
+    Ok(())
+}
+
+/// Spouštění po přihlášení (ve verzi pro App Store zatím ne — LaunchAgent
+/// v sandboxu nejde).
+#[tauri::command]
+fn autostart_supported() -> bool {
+    cfg!(not(feature = "app-store"))
 }
 
 #[tauri::command]
@@ -358,9 +413,13 @@ fn get_settings(state: tauri::State<AppState>) -> SettingsView {
 fn save_settings(app: AppHandle, settings: Settings) -> CmdResult<SettingsView> {
     let state = app.state::<AppState>();
     let mut tracker = state.0.lock().unwrap();
+    let old_shortcut = tracker.settings.shortcut.clone();
     tracker.save_settings(settings).map_err(err)?;
     let view = settings_view(&tracker);
     drop(tracker);
+    if view.settings.shortcut != old_shortcut {
+        apply_shortcut(&app, &view.settings.shortcut)?;
+    }
     if view.settings.icloud_sync {
         let app = app.clone();
         std::thread::spawn(move || run_sync(&app));
@@ -466,7 +525,51 @@ fn spawn_ticker(app: AppHandle) {
             show_main_window(&app);
             let _ = app.emit("tracker-changed", ());
         }
+        if let Some(TickEvent::RemindStart) = event {
+            notify(&app, texts.remind_start_title, texts.remind_start_body);
+        }
+        if let Some(TickEvent::RemindBreak { minutes }) = event {
+            notify(
+                &app,
+                texts.remind_break_title,
+                &texts.break_reminder(minutes),
+            );
+        }
     });
+}
+
+fn notify(app: &AppHandle, title: &str, body: &str) {
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// Globální zkratka: nepracuje → začít (naposledy použitý projekt),
+/// pracuje → pauza, pauza → pokračovat. Krátká notifikace jako potvrzení.
+fn shortcut_toggle(app: &AppHandle) {
+    let (status, texts) = {
+        let state = app.state::<AppState>();
+        let tracker = state.0.lock().unwrap();
+        (tracker.status_now(), i18n::texts(tracker.lang()))
+    };
+    let (action, message) = match status {
+        tracker::Status::Off => (tray::Action::StartLast, texts.shortcut_started),
+        tracker::Status::Working => (tray::Action::Pause, texts.shortcut_paused),
+        tracker::Status::Paused | tracker::Status::AutoPaused => {
+            (tray::Action::Resume, texts.shortcut_resumed)
+        }
+    };
+    handle_tray_action(app, action);
+    notify(app, "Home Office Tracker", message);
+}
+
+/// Zaregistruje globální zkratku z nastavení (předchozí zruší).
+fn apply_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let gs = app.global_shortcut();
+    gs.unregister_all().map_err(err)?;
+    if shortcut.is_empty() {
+        return Ok(());
+    }
+    gs.register(shortcut).map_err(err)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -479,16 +582,48 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if event.state() == ShortcutState::Pressed {
+                        shortcut_toggle(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             #[cfg(not(feature = "app-store"))]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_autostart::init(
+                    tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                    Some(vec!["--autostart"]),
+                ))?;
+            }
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let conn = db::open(&dir.join("tracker.sqlite"))?;
             app.manage(AppState(Mutex::new(Tracker::new(conn)?)));
 
             app.manage(tray::TrayState::default());
+            let shortcut = app
+                .state::<AppState>()
+                .0
+                .lock()
+                .unwrap()
+                .settings
+                .shortcut
+                .clone();
+            if let Err(e) = apply_shortcut(app.handle(), &shortcut) {
+                eprintln!("zkratku {shortcut} nejde zaregistrovat: {e}");
+            }
+            // Okno je v konfiguraci skryté; ukážeme ho, jen když appku spustil
+            // člověk — po automatickém startu po přihlášení zůstane jen v liště.
+            if !std::env::args().any(|a| a == "--autostart") {
+                show_main_window(app.handle());
+            }
             let mut tray = TrayIconBuilder::with_id("main")
                 .tooltip("Home Office Tracker")
                 .on_menu_event(|app, event| {
@@ -558,6 +693,10 @@ pub fn run() {
             get_settings,
             updates_enabled,
             sync_status,
+            update_session,
+            add_session,
+            delete_session,
+            autostart_supported,
             sync_now,
             save_settings
         ])
